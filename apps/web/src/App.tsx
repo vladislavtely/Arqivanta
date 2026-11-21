@@ -1,0 +1,199 @@
+import { useEffect, useState } from 'react';
+import type { ProjectAnalysis, ProjectSummary } from '@arqivanta/shared';
+import {
+  Box,
+  Download,
+  FolderOpen,
+  LayoutGrid,
+  LockKeyhole,
+  Network,
+  Sparkles,
+} from 'lucide-react';
+import { api, errorMessage, post, projectRoute } from './api';
+import { AI, initialAISettings } from './components/AI';
+import { Architecture } from './components/Architecture';
+import { Explorer } from './components/Explorer';
+import type { FileSelection } from './components/Explorer';
+import { Export } from './components/Export';
+import { Home } from './components/Home';
+import type { ProjectInput } from './components/Home';
+import { NoProject } from './components/ui';
+
+const navigation = [
+  { id: 'home', label: 'Overview', Icon: LayoutGrid },
+  { id: 'explorer', label: 'Repository Explorer', Icon: FolderOpen },
+  { id: 'graph', label: 'Architecture Map', Icon: Network },
+  { id: 'ai', label: 'AI Explanations', Icon: Sparkles },
+  { id: 'export', label: 'Export Center', Icon: Download },
+] as const;
+
+type View = (typeof navigation)[number]['id'];
+
+export function App() {
+  const [view, setView] = useState<View>('home');
+  const [analysis, setAnalysis] = useState<ProjectAnalysis>();
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<FileSelection>();
+  const [settings, setSettings] = useState(initialAISettings);
+  const title = navigation.find((item) => item.id === view)?.label ?? 'Overview';
+
+  useEffect(() => {
+    const abort = new AbortController();
+    void api<ProjectSummary[]>('/projects', { signal: abort.signal }).then(
+      (items) => {
+        if (abort.signal.aborted) return;
+        setProjects(items);
+        setHistoryError(null);
+      },
+      (cause: unknown) => {
+        if (!abort.signal.aborted) setHistoryError(errorMessage(cause));
+      },
+    );
+    return () => abort.abort();
+  }, [analysis]);
+
+  useEffect(() => {
+    document.title = view === 'home' ? 'Arqivanta' : `${title} · Arqivanta`;
+  }, [title, view]);
+
+  async function openProject(route: string, loading: string, data?: ProjectInput) {
+    if (pending) return;
+    setPending(loading);
+    setError(null);
+    try {
+      const result = await api<ProjectAnalysis>(route, data ? post(data) : undefined);
+      const entry = result.entryPoints.find((point) =>
+        result.files.some((file) => file.path === point.path),
+      );
+      const path = entry?.path ?? result.files[0]?.path;
+      setAnalysis(result);
+      setSelection(path ? { path } : undefined);
+      setView('explorer');
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setView('home');
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function openFile(file: FileSelection) {
+    setSelection(file);
+    setView('explorer');
+  }
+
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
+      <aside className="sidebar" aria-label="Arqivanta workspace">
+        <button className="brand" type="button" onClick={() => setView('home')}>
+          <span className="brand-mark">
+            <Box size={20} strokeWidth={2} aria-hidden="true" />
+          </span>
+          <span>Arqivanta</span>
+        </button>
+        <nav className="main-nav" aria-label="Workspace navigation">
+          {navigation.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              aria-current={id === view ? 'page' : undefined}
+              onClick={() => setView(id)}
+              title={label}
+            >
+              <Icon size={18} aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+        {analysis && (
+          <div className="sidebar-project">
+            <span>Current repository</span>
+            <button
+              className="current-project"
+              type="button"
+              title={analysis.project.name}
+              aria-label={`Open ${analysis.project.name} in Repository Explorer`}
+              onClick={() => setView('explorer')}
+            >
+              <span className="current-project-icon">
+                <FolderOpen size={15} aria-hidden="true" />
+              </span>
+              <span>{analysis.project.name}</span>
+            </button>
+          </div>
+        )}
+        <div className="sidebar-footer">
+          <LockKeyhole size={15} aria-hidden="true" />
+          <span>Local workspace</span>
+        </div>
+      </aside>
+      <div className="app-content">
+        <header className="topbar">
+          <div className="breadcrumbs">
+            <span>Workspace</span>
+            <span aria-hidden="true">/</span>
+            <strong>{title}</strong>
+          </div>
+          {analysis?.project.commitSha && (
+            <span className="commit-indicator" title={analysis.project.commitSha}>
+              Commit {analysis.project.commitSha.slice(0, 7)}
+            </span>
+          )}
+        </header>
+        <main id="main-content" className="main-content" tabIndex={-1}>
+          {view === 'home' && (
+            <Home
+              projects={projects}
+              pending={pending}
+              error={error ?? historyError}
+              onImport={(data, message) => {
+                void openProject('/projects', message, data);
+              }}
+              onOpen={(project) => {
+                void openProject(projectRoute(project.id), 'Opening saved project…');
+              }}
+            />
+          )}
+          {view === 'ai' && (
+            <AI
+              analysis={analysis}
+              selection={selection}
+              settings={settings}
+              onSettings={setSettings}
+              onSelect={setSelection}
+              onOpen={openFile}
+            />
+          )}
+          {view !== 'home' && view !== 'ai' && !analysis && (
+            <NoProject onOpen={() => setView('home')} />
+          )}
+          {view === 'explorer' && analysis && (
+            <Explorer
+              key={analysis.project.id}
+              analysis={analysis}
+              selection={selection}
+              onSelect={setSelection}
+              onExplain={() => setView('ai')}
+            />
+          )}
+          {view === 'graph' && analysis && (
+            <Architecture
+              key={analysis.project.id}
+              analysis={analysis}
+              selected={selection?.path}
+              onSelect={setSelection}
+              onOpenFile={openFile}
+            />
+          )}
+          {view === 'export' && analysis && <Export analysis={analysis} />}
+        </main>
+      </div>
+    </div>
+  );
+}

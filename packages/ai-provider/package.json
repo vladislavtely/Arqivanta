@@ -1,0 +1,10 @@
+{
+  "name": "@arqivanta/ai-provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@arqivanta/shared": "workspace:*"
+  }
+}

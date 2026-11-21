@@ -1,0 +1,6 @@
+{
+  "name": "field-notes-example",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}
