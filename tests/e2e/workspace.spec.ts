@@ -51,6 +51,7 @@ test('opens a folder graph, moves and resets a node, and highlights both import 
 }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Open example' }).click();
+  await expect(page.getByRole('heading', { name: 'Repository Explorer' })).toBeVisible();
   await page.getByRole('button', { name: 'Architecture Map' }).click();
   const scope = page.getByLabel('Filter architecture map');
   await scope.selectOption('folders');
