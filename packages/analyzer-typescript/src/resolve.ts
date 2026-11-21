@@ -1,7 +1,7 @@
 import path from 'node:path';
-import type { Diagnostic, FileRecord, SourceRef } from '@arqivanta/shared';
+import { comparePaths, isJavaScriptOrTypeScript } from '@arqivanta/shared';
+import type { Diagnostic, FileRecord, SourceFile, SourceRef } from '@arqivanta/shared';
 import ts from 'typescript';
-import { comparePaths, type FoundFile, isSourceFile } from './discover.ts';
 
 const virtualRoot = '/repo';
 const defaultOptions: ts.CompilerOptions = {
@@ -20,7 +20,10 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function createModuleResolver(files: FoundFile[], report: (diagnostic: Diagnostic) => void) {
+export function createModuleResolver(
+  files: SourceFile[],
+  report: (diagnostic: Diagnostic) => void,
+) {
   const contents = new Map(files.map((file) => [virtualPath(file.path), file.source]));
   const directories = new Set(['/', virtualRoot]);
   for (const filePath of contents.keys()) {
@@ -137,7 +140,7 @@ export function createModuleResolver(files: FoundFile[], report: (diagnostic: Di
 }
 
 export function findEntryPoints(
-  files: FoundFile[],
+  files: SourceFile[],
   records: FileRecord[],
   resolve: ReturnType<typeof createModuleResolver>,
   checkDeadline: () => void,
@@ -160,7 +163,7 @@ export function findEntryPoints(
     const absolute = path.posix.join(path.posix.dirname(packagePath), local);
     try {
       const mapped = paths.has(absolute) ? absolute : resolve(packagePath, `./${local}`, 'import');
-      if (mapped && isSourceFile(mapped)) candidates.add(mapped);
+      if (mapped && isJavaScriptOrTypeScript(mapped)) candidates.add(mapped);
     } catch {
       return;
     }
@@ -195,7 +198,8 @@ export function findEntryPoints(
   }
 
   for (const file of records) {
-    if (conventionalEntries.test(file.path) && isSourceFile(file.path)) candidates.add(file.path);
+    if (conventionalEntries.test(file.path) && isJavaScriptOrTypeScript(file.path))
+      candidates.add(file.path);
   }
   return [...candidates]
     .sort(comparePaths)

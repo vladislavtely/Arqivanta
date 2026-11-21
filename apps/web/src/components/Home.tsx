@@ -13,10 +13,12 @@ import {
 } from 'lucide-react';
 import { ErrorNotice, Loading, plural } from './ui';
 
-export type ProjectInput = { path: string } | { url: string } | { example: true };
+export type ProjectInput =
+  { path: string } | { browse: true } | { url: string } | { example: true };
 
 type HomeProps = {
   projects: ProjectSummary[];
+  canBrowseFolders: boolean;
   pending: string | null;
   error: string | null;
   onImport: (input: ProjectInput, message: string) => void;
@@ -25,7 +27,7 @@ type HomeProps = {
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 
-export function Home({ projects, pending, error, onImport, onOpen }: HomeProps) {
+export function Home({ projects, canBrowseFolders, pending, error, onImport, onOpen }: HomeProps) {
   const [folder, setFolder] = useState('');
   const [url, setUrl] = useState('');
   const busy = pending !== null;
@@ -46,7 +48,7 @@ export function Home({ projects, pending, error, onImport, onOpen }: HomeProps) 
             <FolderOpen size={20} aria-hidden="true" />
           </span>
           <h2 id="local-title">Open a local project</h2>
-          <p>Analyze JavaScript and TypeScript source directly from a folder on this machine.</p>
+          <p>Analyze JavaScript, TypeScript, and Python source from a folder on this machine.</p>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -64,9 +66,27 @@ export function Home({ projects, pending, error, onImport, onOpen }: HomeProps) 
               required
               maxLength={4096}
             />
-            <button className="button primary" type="submit" disabled={busy || !folder.trim()}>
-              <FolderOpen size={16} aria-hidden="true" /> Analyze folder
-            </button>
+            <div className="folder-actions">
+              {canBrowseFolders && (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    onImport({ browse: true }, 'Selecting and analyzing a local project…')
+                  }
+                >
+                  <FolderOpen size={16} aria-hidden="true" /> Browse folders
+                </button>
+              )}
+              <button
+                className={canBrowseFolders ? 'button' : 'button primary'}
+                type="submit"
+                disabled={busy || !folder.trim()}
+              >
+                Analyze folder
+              </button>
+            </div>
           </form>
         </section>
 

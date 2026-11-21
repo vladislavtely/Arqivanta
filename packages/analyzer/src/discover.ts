@@ -1,16 +1,18 @@
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import type { Diagnostic } from '@arqivanta/shared';
+import { comparePaths, isJavaScriptOrTypeScript, isPythonSource } from '@arqivanta/shared';
+import type { Diagnostic, SourceFile } from '@arqivanta/shared';
 import ignore, { type Ignore } from 'ignore';
 
-const fileLimit = 2_000;
-const entryLimit = 20_000;
+const fileLimit = 10_000;
+const entryLimit = 100_000;
 const depthLimit = 32;
 const fileBytesLimit = 384 * 1024;
-const totalBytesLimit = 16 * 1024 * 1024;
+const totalBytesLimit = 32 * 1024 * 1024;
 const ignoreBytesLimit = 64 * 1024;
 const diagnosticLimit = 200;
+const readBatchSize = 12;
 
 const skippedDirectories = new Set([
   '.agents',
@@ -21,34 +23,37 @@ const skippedDirectories = new Set([
   '.git',
   '.gnupg',
   '.hg',
+  '.mypy_cache',
   '.next',
   '.nuxt',
   '.output',
   '.private',
+  '.pytest_cache',
+  '.ruff_cache',
   '.secrets',
   '.ssh',
   '.svn',
   '.turbo',
   '.venv',
+  '__pycache__',
+  '__pypackages__',
   'build',
   'coverage',
   'dist',
   'node_modules',
   'out',
+  'site-packages',
+  'venv',
 ]);
 const secretName =
   /^(?:\.env(?:[._-]|$)|\.npmrc$|\.pypirc$|\.netrc$|\.git-credentials$|\.htpasswd$|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$)|(?:credentials?|secrets?|service[-_]?account|application_default_credentials)(?:[.\-_]|$))|\.(?:pem|key|p12|pfx|jks|keystore)$|^\.DS_Store$/i;
-const sourceName = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
-const configName = /^(?:(?:tsconfig|jsconfig)(?:\.[\w.-]+)?|package)\.json$/i;
+const configName = /^(?:(?:(?:tsconfig|jsconfig)(?:\.[\w.-]+)?|package)\.json|pyproject\.toml)$/i;
 const metadataName =
   /^(?:README|CHANGELOG|CONTRIBUTING|LICENSE|SECURITY|AGENTS)(?:\.(?:md|txt))?$/i;
 
 type RuleSet = { directory: string; rules: Ignore };
-export type FoundFile = { path: string; source: string; bytes: number };
-
-export function isSourceFile(filePath: string) {
-  return sourceName.test(filePath);
-}
+type Candidate = { absolute: string; relative: string };
+const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 function isInside(root: string, candidate: string) {
   const relative = path.relative(root, candidate);
@@ -96,7 +101,7 @@ async function readBounded(root: string, absolute: string, limit: number) {
     try {
       return {
         kind: 'text',
-        source: new TextDecoder('utf-8', { fatal: true }).decode(content),
+        source: utf8.decode(content),
         bytes,
       } as const;
     } catch {
@@ -122,10 +127,6 @@ function isMissing(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
-export function comparePaths(a: string, b: string) {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 export async function discoverRepository(
   selectedRoot: string,
   checkDeadline: () => void,
@@ -136,7 +137,7 @@ export async function discoverRepository(
   if (!selected.isDirectory() || selected.isSymbolicLink())
     throw new Error('Select a regular repository folder.');
   const root = await realpath(selectedRoot);
-  const files: FoundFile[] = [];
+  const files: SourceFile[] = [];
   let entries = 0;
   let bytes = 0;
   let diagnostics = 0;
@@ -147,6 +148,43 @@ export async function discoverRepository(
     if (diagnostics === diagnosticLimit)
       report({ severity: 'warning', message: 'Additional discovery warnings were omitted.' });
     diagnostics++;
+  }
+
+  async function readBatch(pending: Candidate[]) {
+    if (!pending.length) return;
+    const limit = Math.min(fileBytesLimit, totalBytesLimit - bytes);
+    const reads = await Promise.allSettled(
+      pending.map(({ absolute }) => readBounded(root, absolute, limit)),
+    );
+
+    // Apply limits and report diagnostics in path order, regardless of completion order.
+    for (const [index, { relative }] of pending.entries()) {
+      checkDeadline();
+      if (files.length >= fileLimit || bytes >= totalBytesLimit) {
+        warn(
+          'Repository source limit reached. Results cover the portion scanned before the limit.',
+        );
+        limitReached = true;
+        break;
+      }
+      const read = reads[index];
+      if (read.status === 'rejected') {
+        warn('File could not be read.', relative);
+        continue;
+      }
+      const contents = read.value;
+      if (!contents) {
+        warn('A non-regular, changed, or non-UTF-8 file was skipped.', relative);
+        continue;
+      }
+      if (contents.kind === 'tooLarge' || contents.bytes > totalBytesLimit - bytes) {
+        warn('File exceeds the remaining per-file or repository source limit.', relative);
+        continue;
+      }
+      files.push({ path: relative, source: contents.source, bytes: contents.bytes });
+      bytes += contents.bytes;
+    }
+    pending.length = 0;
   }
 
   async function visit(
@@ -217,6 +255,7 @@ export async function discoverRepository(
       return;
     }
 
+    const pending: Candidate[] = [];
     children.sort((a, b) => comparePaths(a.name, b.name));
     for (const child of children) {
       checkDeadline();
@@ -229,6 +268,8 @@ export async function discoverRepository(
       if (child.directory) {
         if (skippedDirectories.has(name.toLowerCase()) || isIgnored(ruleSets, relative, true))
           continue;
+        await readBatch(pending);
+        if (limitReached) return;
         if (depth >= depthLimit) {
           warn('Directory nesting limit reached.', relative);
           continue;
@@ -236,36 +277,18 @@ export async function discoverRepository(
         await visit(absolute, relative, ruleSets, depth + 1);
         continue;
       }
-      if (!sourceName.test(name) && !configName.test(name) && !metadataName.test(name)) continue;
+      if (
+        !isJavaScriptOrTypeScript(name) &&
+        !isPythonSource(name) &&
+        !configName.test(name) &&
+        !metadataName.test(name)
+      )
+        continue;
       if (isIgnored(ruleSets, relative, false)) continue;
-      if (files.length >= fileLimit || bytes >= totalBytesLimit) {
-        warn(
-          'Repository source limit reached. Results cover the portion scanned before the limit.',
-        );
-        limitReached = true;
-        return;
-      }
-
-      try {
-        const contents = await readBounded(
-          root,
-          absolute,
-          Math.min(fileBytesLimit, totalBytesLimit - bytes),
-        );
-        if (!contents) {
-          warn('A non-regular, changed, or non-UTF-8 file was skipped.', relative);
-          continue;
-        }
-        if (contents.kind === 'tooLarge') {
-          warn('File exceeds the remaining per-file or repository source limit.', relative);
-          continue;
-        }
-        files.push({ path: relative, source: contents.source, bytes: contents.bytes });
-        bytes += contents.bytes;
-      } catch {
-        warn('File could not be read.', relative);
-      }
+      pending.push({ absolute, relative });
+      if (pending.length === readBatchSize) await readBatch(pending);
     }
+    await readBatch(pending);
   }
 
   const rootRules: RuleSet[] = [];

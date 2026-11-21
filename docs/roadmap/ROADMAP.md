@@ -10,4 +10,9 @@
 | 5. GitHub import       | Import a bounded public snapshot, retain its SHA and use the local cache for repeated analysis.                                                  |
 | 6. Release preparation | Export Markdown and JSON. Verify the critical user flow and exercise CI on Windows, macOS and Linux. Prepare publication for operator approval.  |
 
-After release, evaluate native desktop folder selection with Tauri, broader language support, and more precise module resolution for larger monorepos and build systems.
+## Next priorities
+
+1. Add incremental reanalysis that detects changed and removed files and keeps the active selection.
+2. Expand full-project source search and improve module resolution in monorepos.
+3. Add additional language parsers through the same discovery and snapshot pipeline. Choose the next language based on the repositories users want to explore.
+4. Profile large real repositories and compare native parsers or indexing components where CPU use or memory limits dominate.

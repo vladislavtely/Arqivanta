@@ -38,7 +38,10 @@ export function fileName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
-export function plural(count: number, noun: string): string {
-  const pluralNoun = noun === 'dependency' ? 'dependencies' : `${noun}s`;
+export function plural(
+  count: number,
+  noun: string,
+  pluralNoun = noun === 'dependency' ? 'dependencies' : `${noun}s`,
+): string {
   return `${count.toLocaleString()} ${count === 1 ? noun : pluralNoun}`;
 }

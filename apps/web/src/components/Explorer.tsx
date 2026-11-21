@@ -23,6 +23,8 @@ type Directory = {
   files: FileRecord[];
 };
 
+const filesPerPage = 250;
+
 function toTree(files: FileRecord[]): Directory {
   const root: Directory = { path: '', folders: new Map(), files: [] };
   for (const file of files) {
@@ -126,6 +128,11 @@ function FileTree({
 }) {
   const [query, setQuery] = useState('');
   const [toggles, setToggles] = useState<Record<string, boolean>>({});
+  const [pageOverride, setPageOverride] = useState<{
+    query: string;
+    selected?: string;
+    page: number;
+  }>();
   const search = query.trim().toLowerCase();
   const matches = useMemo(
     () =>
@@ -139,7 +146,22 @@ function FileTree({
         : files,
     [files, search],
   );
-  const tree = useMemo(() => toTree(matches), [matches]);
+  const pageCount = Math.ceil(matches.length / filesPerPage);
+  const selectedIndex = selected ? matches.findIndex((file) => file.path === selected) : -1;
+  const selectedPage = selectedIndex < 0 ? 0 : Math.floor(selectedIndex / filesPerPage);
+  const page =
+    pageOverride?.query === search && pageOverride.selected === selected
+      ? Math.min(pageOverride.page, Math.max(0, pageCount - 1))
+      : selectedPage;
+  const tree = useMemo(
+    () => toTree(matches.slice(page * filesPerPage, (page + 1) * filesPerPage)),
+    [matches, page],
+  );
+  const scroll = useRef<HTMLDivElement>(null);
+  function changePage(nextPage: number) {
+    setPageOverride({ query: search, selected, page: nextPage });
+    scroll.current?.scrollTo(0, 0);
+  }
 
   return (
     <nav className="explorer-tree" aria-label="Repository files">
@@ -157,7 +179,32 @@ function FileTree({
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      <div className="tree-scroll">
+      <div className="tree-scroll" ref={scroll}>
+        {pageCount > 1 && (
+          <div className="tree-pagination">
+            <button
+              className="button icon-button"
+              type="button"
+              aria-label="Previous file page"
+              disabled={page === 0}
+              onClick={() => changePage(page - 1)}
+            >
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <span aria-live="polite">
+              Page {page + 1} of {pageCount}
+            </span>
+            <button
+              className="button icon-button"
+              type="button"
+              aria-label="Next file page"
+              disabled={page + 1 === pageCount}
+              onClick={() => changePage(page + 1)}
+            >
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         {matches.length > 0 ? (
           <TreeList
             directory={tree}
@@ -170,7 +217,7 @@ function FileTree({
           />
         ) : (
           <p className="pane-empty">
-            {search ? 'No matching files.' : 'No JavaScript or TypeScript files were found.'}
+            {search ? 'No matching files.' : 'No supported files were found.'}
           </p>
         )}
       </div>
@@ -182,18 +229,22 @@ const linesPerPage = 400;
 const tokenPattern =
   /(\/\/.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:abstract|as|async|await|break|case|catch|class|const|continue|declare|default|delete|else|enum|export|extends|false|finally|for|from|function|if|import|in|interface|let|new|null|of|private|protected|public|readonly|return|static|super|switch|this|throw|true|try|type|typeof|undefined|var|void|while|yield)\b|\b\d+(?:\.\d+)?\b)/g;
 
-function codeTokens(line: string) {
+const pythonTokenPattern =
+  /(#.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield)\b|\b\d+(?:\.\d+)?\b)/g;
+
+function codeTokens(line: string, language: string) {
   if (line.length > 4_000) return line;
-  const parts = line.split(tokenPattern);
+  const parts = line.split(language === 'Python' ? pythonTokenPattern : tokenPattern);
   return parts.map((part, index) => {
     if (index % 2 === 0) return part;
-    const kind = part.startsWith('//')
-      ? 'comment'
-      : ['"', "'", '`'].includes(part[0])
-        ? 'string'
-        : /\d/.test(part[0])
-          ? 'number'
-          : 'keyword';
+    const kind =
+      part.startsWith('//') || (language === 'Python' && part.startsWith('#'))
+        ? 'comment'
+        : ['"', "'", '`'].includes(part[0])
+          ? 'string'
+          : /\d/.test(part[0])
+            ? 'number'
+            : 'keyword';
     return (
       <span className={`token-${kind}`} key={index}>
         {part}
@@ -204,10 +255,12 @@ function codeTokens(line: string) {
 
 function SourceCode({
   content,
+  language,
   selection,
   onSelect,
 }: {
   content: string;
+  language: string;
   selection: FileSelection;
   onSelect: (selection: FileSelection) => void;
 }) {
@@ -252,7 +305,7 @@ function SourceCode({
               >
                 {number}
               </button>
-              <code>{codeTokens(line) || ' '}</code>
+              <code>{codeTokens(line, language) || ' '}</code>
             </div>
           );
         })}
@@ -362,7 +415,12 @@ function SourcePane({
       {failure ? (
         <ErrorNotice message={failure} />
       ) : source ? (
-        <SourceCode content={source.content} selection={selection} onSelect={onSelect} />
+        <SourceCode
+          content={source.content}
+          language={file.language}
+          selection={selection}
+          onSelect={onSelect}
+        />
       ) : (
         <Loading>Reading source…</Loading>
       )}

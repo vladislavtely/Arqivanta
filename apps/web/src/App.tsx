@@ -33,12 +33,24 @@ export function App() {
   const [view, setView] = useState<View>('home');
   const [analysis, setAnalysis] = useState<ProjectAnalysis>();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [canBrowseFolders, setCanBrowseFolders] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selection, setSelection] = useState<FileSelection>();
   const [settings, setSettings] = useState(initialAISettings);
   const title = navigation.find((item) => item.id === view)?.label ?? 'Overview';
+
+  useEffect(() => {
+    const abort = new AbortController();
+    void api<{ folderPicker: boolean }>('/health', { signal: abort.signal }).then(
+      ({ folderPicker }) => {
+        if (!abort.signal.aborted) setCanBrowseFolders(folderPicker === true);
+      },
+      () => {},
+    );
+    return () => abort.abort();
+  }, []);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -64,7 +76,8 @@ export function App() {
     setPending(loading);
     setError(null);
     try {
-      const result = await api<ProjectAnalysis>(route, data ? post(data) : undefined);
+      const result = await api<ProjectAnalysis | null>(route, data ? post(data) : undefined);
+      if (result === null) return;
       const entry = result.entryPoints.find((point) =>
         result.files.some((file) => file.path === point.path),
       );
@@ -150,6 +163,7 @@ export function App() {
           {view === 'home' && (
             <Home
               projects={projects}
+              canBrowseFolders={canBrowseFolders}
               pending={pending}
               error={error ?? historyError}
               onImport={(data, message) => {

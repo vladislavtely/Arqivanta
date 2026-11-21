@@ -1,11 +1,13 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { expect, it } from 'vitest';
 import { openProjectStore } from './index.ts';
 
 it('persists a pinned snapshot and its source across connections', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'arqivanta-storage-test-'));
+  const temporary = await realpath(tmpdir());
+  const directory = await mkdtemp(join(temporary, 'arqivanta-storage-test-'));
   const filename = join(directory, 'projects.sqlite');
   let store = openProjectStore(filename);
   try {
@@ -35,8 +37,25 @@ it('persists a pinned snapshot and its source across connections', async () => {
         key,
       ),
     ).toEqual(result);
+
+    const legacy = new DatabaseSync(filename);
+    try {
+      legacy
+        .prepare("INSERT INTO projects VALUES ('legacy', ?, NULL, '{}', '{}', ?)")
+        .run(
+          new Date().toISOString(),
+          JSON.stringify({ 'legacy.ts': 'export const legacy = true;' }),
+        );
+      expect(store.source('legacy', 'legacy.ts')).toBe('export const legacy = true;');
+      expect(store.source('legacy', 'index.ts')).toBeUndefined();
+    } finally {
+      legacy.close();
+    }
   } finally {
     store.close();
-    await rm(directory, { recursive: true, force: true });
+    const resolved = await realpath(directory);
+    if (dirname(resolved) === temporary && resolved === directory) {
+      await rm(resolved, { recursive: true, force: true });
+    }
   }
 });

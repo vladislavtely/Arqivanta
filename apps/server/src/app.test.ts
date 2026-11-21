@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectAnalysis } from '@arqivanta/shared';
 import { createApp } from './app.ts';
 
@@ -8,8 +8,8 @@ const host = '127.0.0.1:4317';
 const headers = { host, origin: `http://${host}`, 'sec-fetch-site': 'same-origin' };
 let app: ReturnType<typeof createApp> | undefined;
 
-function setup() {
-  app = createApp({ database: ':memory:', exampleRoot });
+function setup(folderPicker?: Parameters<typeof createApp>[0]['folderPicker']) {
+  app = createApp({ database: ':memory:', exampleRoot, folderPicker });
   return app;
 }
 
@@ -19,6 +19,53 @@ afterEach(async () => {
 });
 
 describe('loopback API', () => {
+  it('opens the selected local folder and treats dialog cancellation as a normal response', async () => {
+    const pickFolder = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(exampleRoot);
+    const api = setup(pickFolder);
+    const health = await api.inject({ url: '/api/health', headers });
+    expect(health.json()).toMatchObject({ folderPicker: true });
+
+    const pickRequest = {
+      method: 'POST',
+      url: '/api/projects',
+      headers,
+      payload: { browse: true },
+    } as const;
+    const foreign = await api.inject({
+      ...pickRequest,
+      headers: { ...headers, origin: 'https://example.invalid' },
+    });
+    expect(foreign.statusCode).toBe(403);
+    expect(pickFolder).not.toHaveBeenCalled();
+
+    const cancelled = await api.inject(pickRequest);
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toBeNull();
+    expect((await api.inject({ url: '/api/projects', headers })).json()).toEqual([]);
+
+    const imported = await api.inject(pickRequest);
+    expect(imported.statusCode, imported.body).toBe(200);
+    expect(imported.json<ProjectAnalysis>()).toMatchObject({
+      project: { origin: 'local', name: 'field-notes' },
+      entryPoints: expect.arrayContaining([expect.objectContaining({ path: 'src/index.ts' })]),
+    });
+    expect(pickFolder).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers path entry when a native folder picker is unavailable', async () => {
+    const api = setup(null);
+    const health = await api.inject({ url: '/api/health', headers });
+    expect(health.json()).toMatchObject({ folderPicker: false });
+    const result = await api.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers,
+      payload: { browse: true },
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.json().message).toContain('folder path');
+  });
+
   it('analyzes a real local folder and serves matched source and export snapshots', async () => {
     const api = setup();
     const imported = await api.inject({

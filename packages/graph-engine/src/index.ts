@@ -1,6 +1,9 @@
 import type { DependencyEdge, FileRecord, SourceRef } from '@arqivanta/shared';
 
-export type GraphScope = 'all' | 'connected' | 'entry-points';
+export { buildFolderGraph, parentFolder } from './folders.ts';
+export type { FolderLink } from './folders.ts';
+
+export type GraphScope = 'all' | 'connected' | 'entry-points' | 'selected';
 
 export type PositionedFile = {
   file: FileRecord;
@@ -12,6 +15,9 @@ export type PositionedFile = {
 type Options = {
   query?: string;
   scope?: GraphScope;
+  selected?: string;
+  maxFiles?: number;
+  maxEdges?: number;
 };
 
 function comparePaths(left: string, right: string) {
@@ -29,29 +35,57 @@ export function buildGraphView(
   const localEdges = edges.filter((edge) => paths.has(edge.source) && paths.has(edge.target));
   const connected = new Set<string>();
   const nearEntry = new Set(entryPaths);
+  const nearSelection = new Set<string>();
+  if (options.selected && paths.has(options.selected)) nearSelection.add(options.selected);
   for (const edge of localEdges) {
     connected.add(edge.source).add(edge.target);
     if (entryPaths.has(edge.source) || entryPaths.has(edge.target))
       nearEntry.add(edge.source).add(edge.target);
+    if (edge.source === options.selected || edge.target === options.selected)
+      nearSelection.add(edge.source).add(edge.target);
   }
 
   const query = options.query?.trim().toLowerCase() ?? '';
-  const scope =
-    options.scope === 'connected'
-      ? connected
-      : options.scope === 'entry-points'
-        ? nearEntry
-        : paths;
-  const visibleFiles = files
+  const scope = { all: paths, connected, 'entry-points': nearEntry, selected: nearSelection }[
+    options.scope ?? 'all'
+  ];
+  const matchedFiles = files
     .filter((file) => scope.has(file.path) && file.path.toLowerCase().includes(query))
     .sort((left, right) => comparePaths(left.path, right.path));
+  const matchedPaths = new Set(matchedFiles.map((file) => file.path));
+  const maxFiles = options.maxFiles ?? matchedFiles.length;
+  const visibleFiles =
+    matchedFiles.length > maxFiles
+      ? matchedFiles
+          .sort((left, right) => priority(left.path) - priority(right.path))
+          .slice(0, maxFiles)
+      : matchedFiles;
+
+  function priority(path: string) {
+    if (path === options.selected) return 0;
+    if (entryPaths.has(path)) return 1;
+    return connected.has(path) ? 2 : 3;
+  }
+
   const visiblePaths = new Set(visibleFiles.map((file) => file.path));
-  const visibleEdges = localEdges
-    .filter((edge) => visiblePaths.has(edge.source) && visiblePaths.has(edge.target))
-    .sort(
-      (left, right) =>
-        comparePaths(left.source, right.source) || comparePaths(left.target, right.target),
-    );
+  let matchingEdgeCount = 0;
+  const visibleEdges: DependencyEdge[] = [];
+  for (const edge of localEdges) {
+    if (
+      options.scope === 'selected' &&
+      edge.source !== options.selected &&
+      edge.target !== options.selected
+    )
+      continue;
+    if (matchedPaths.has(edge.source) && matchedPaths.has(edge.target)) matchingEdgeCount++;
+    if (visiblePaths.has(edge.source) && visiblePaths.has(edge.target)) visibleEdges.push(edge);
+  }
+  visibleEdges.sort(
+    (left, right) =>
+      comparePaths(left.source, right.source) || comparePaths(left.target, right.target),
+  );
+  if (options.maxEdges !== undefined && visibleEdges.length > options.maxEdges)
+    visibleEdges.length = options.maxEdges;
 
   const outgoing = new Map<string, string[]>();
   const incoming = new Set<string>();
@@ -107,5 +141,10 @@ export function buildGraphView(
     rows.set(column, row + 1);
     return { file, x: column * 270, y: row * 95, entryPoint: entryPaths.has(file.path) };
   });
-  return { files: positioned, edges: visibleEdges };
+  return {
+    files: positioned,
+    edges: visibleEdges,
+    matchingFileCount: matchedFiles.length,
+    matchingEdgeCount,
+  };
 }

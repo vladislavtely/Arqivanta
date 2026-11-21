@@ -8,6 +8,7 @@ export function openProjectStore(filename: string) {
   const database = new DatabaseSync(filename);
   database.exec(`
     PRAGMA busy_timeout = 2500;
+    PRAGMA foreign_keys = ON;
     PRAGMA secure_delete = ON;
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
@@ -17,6 +18,12 @@ export function openProjectStore(filename: string) {
       analysis TEXT NOT NULL,
       sources TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS project_sources (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      PRIMARY KEY (project_id, path)
+    ) WITHOUT ROWID;
   `);
 
   const recent = database.prepare(
@@ -24,13 +31,17 @@ export function openProjectStore(filename: string) {
   );
   const byId = database.prepare('SELECT analysis FROM projects WHERE id = ?');
   const byCacheKey = database.prepare('SELECT analysis FROM projects WHERE cache_key = ?');
-  const sourceByPath = database.prepare(`
+  const sourceByPath = database.prepare(
+    'SELECT content FROM project_sources WHERE project_id = ? AND path = ?',
+  );
+  const legacySourceByPath = database.prepare(`
     SELECT source.value AS content FROM projects, json_each(projects.sources) AS source
-    WHERE projects.id = ? AND source.key = ? AND source.type = 'text'
+    WHERE projects.id = ? AND projects.sources <> '{}' AND source.key = ? AND source.type = 'text'
   `);
   const insert = database.prepare(`
-    INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(cache_key) DO NOTHING
+    INSERT INTO projects VALUES (?, ?, ?, ?, ?, '{}') ON CONFLICT(cache_key) DO NOTHING
   `);
+  const insertSource = database.prepare('INSERT INTO project_sources VALUES (?, ?, ?)');
   const trim = database.prepare(`
     DELETE FROM projects WHERE id IN (
       SELECT id FROM projects ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 16
@@ -50,7 +61,8 @@ export function openProjectStore(filename: string) {
       return row ? (JSON.parse(row.analysis as string) as ProjectAnalysis) : undefined;
     },
     source(id: string, path: string): string | undefined {
-      return sourceByPath.get(id, path)?.content as string | undefined;
+      const row = sourceByPath.get(id, path) ?? legacySourceByPath.get(id, path);
+      return row?.content as string | undefined;
     },
     save(origin: ProjectOrigin, result: AnalysisResult, cacheKey?: string): ProjectAnalysis {
       const { sources, ...analysis } = result;
@@ -70,7 +82,6 @@ export function openProjectStore(filename: string) {
           cacheKey ?? null,
           JSON.stringify(project),
           JSON.stringify(document),
-          JSON.stringify(sources),
         );
         if (write.changes === 0 && cacheKey) {
           const existing = byCacheKey.get(cacheKey);
@@ -78,6 +89,9 @@ export function openProjectStore(filename: string) {
           const cached = JSON.parse(existing.analysis as string) as ProjectAnalysis;
           database.exec('COMMIT');
           return cached;
+        }
+        for (const [path, content] of Object.entries(sources)) {
+          insertSource.run(project.id, path, content);
         }
         trim.run();
         database.exec('COMMIT');

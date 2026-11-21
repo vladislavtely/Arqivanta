@@ -14,12 +14,14 @@ import {
 import { ollamaProvider } from '@arqivanta/provider-ollama';
 import { openAiCompatibleProvider } from '@arqivanta/provider-openai-compatible';
 import type { AnalysisResult } from '@arqivanta/shared';
+import { pickWindowsFolder } from './windows-folder-picker.ts';
 
 interface ServerOptions {
   database: string;
   exampleRoot: string;
   webRoot?: string;
   apiPort?: number;
+  folderPicker?: typeof pickWindowsFolder | null;
 }
 
 class RequestError extends Error {
@@ -110,13 +112,21 @@ async function localRoot(input: unknown) {
   return target;
 }
 
-export function createApp({ database, exampleRoot, webRoot, apiPort = 4317 }: ServerOptions) {
+export function createApp({
+  database,
+  exampleRoot,
+  webRoot,
+  apiPort = 4317,
+  folderPicker = process.platform === 'win32' ? pickWindowsFolder : null,
+}: ServerOptions) {
   const app = Fastify({ bodyLimit: 16_384, requestTimeout: 15_000 });
   const store = openProjectStore(database);
   const allowedHosts = new Set([`127.0.0.1:${apiPort}`, '127.0.0.1:5173']);
+  const folderPickerShutdown = new AbortController();
   let importing = false;
   let explaining = false;
 
+  app.addHook('preClose', async () => folderPickerShutdown.abort());
   app.addHook('onClose', async () => store.close());
   app.addHook('onRequest', async (request, reply) => {
     const { host, origin, 'sec-fetch-site': fetchSite } = request.headers;
@@ -182,9 +192,9 @@ export function createApp({ database, exampleRoot, webRoot, apiPort = 4317 }: Se
     return content;
   }
 
-  app.get('/api/health', async () => ({ status: 'ok' }));
+  app.get('/api/health', async () => ({ status: 'ok', folderPicker: folderPicker !== null }));
   app.get('/api/projects', async () => store.list());
-  app.post('/api/projects', async (request) => {
+  app.post('/api/projects', async (request, reply) => {
     const body = record(request.body);
     if (Object.keys(body).length !== 1) {
       throw new RequestError(400, 'Choose one project source.');
@@ -199,8 +209,30 @@ export function createApp({ database, exampleRoot, webRoot, apiPort = 4317 }: Se
           store.save({ name: 'Field Notes', origin: 'example' }, await analyze(exampleRoot), key)
         );
       }
-      if (Object.hasOwn(body, 'path')) {
-        const root = await localRoot(body.path);
+      if (body.browse === true || Object.hasOwn(body, 'path')) {
+        let selectedPath = body.path;
+        if (body.browse === true) {
+          if (!folderPicker) {
+            throw new RequestError(400, 'Enter a folder path on this platform.');
+          }
+          const client = new AbortController();
+          const cancel = () => client.abort();
+          const signal = AbortSignal.any([client.signal, folderPickerShutdown.signal]);
+          reply.raw.once('close', cancel);
+          try {
+            selectedPath = await folderPicker(signal);
+            if (selectedPath === null || signal.aborted) return null;
+          } catch {
+            if (signal.aborted) return null;
+            throw new RequestError(
+              503,
+              'The Windows folder picker could not finish. Enter a folder path to continue.',
+            );
+          } finally {
+            reply.raw.off('close', cancel);
+          }
+        }
+        const root = await localRoot(selectedPath);
         return store.save({ name: basename(root), origin: 'local' }, await analyze(root));
       }
       if (Object.hasOwn(body, 'url')) {
@@ -208,7 +240,7 @@ export function createApp({ database, exampleRoot, webRoot, apiPort = 4317 }: Se
         const repo = parseGitHubUrl(input);
         const deadline = AbortSignal.timeout(90_000);
         const commitSha = await resolveGitHubRevision(repo, deadline);
-        const cacheKey = `github:v1:${repo.url.toLowerCase()}:${commitSha}`;
+        const cacheKey = `github:v2:${repo.url.toLowerCase()}:${commitSha}`;
         return (
           store.cached(cacheKey) ??
           (await withGitHubSnapshot(

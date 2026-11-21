@@ -6,7 +6,11 @@ React and Fastify provide a shared application workflow across operating systems
 
 ## Resolve from an indexed snapshot
 
-The analyzer uses the TypeScript Compiler API to parse source and locate module references. Discovery enforces filesystem boundaries before parsing. Module resolution consults the in-memory index, which preserves reproducibility and keeps repository configuration from expanding filesystem scope. A worker enforces a hard deadline and a heap limit around analysis.
+The analyzer uses separate syntax parsers for JS/TS and Python. Discovery enforces filesystem boundaries before parsing and reads eligible files in bounded batches. Module resolution consults the in-memory index, which preserves reproducibility and keeps repository configuration from expanding filesystem scope. A worker enforces a hard deadline and a heap limit around analysis.
+
+## Measure before adding native components
+
+On the generated large-project benchmark, filesystem reads and snapshot lookup were the first bottlenecks. The scanner now reads concurrently and SQLite indexes source lookups. Use the benchmark to evaluate future incremental indexing, parsing, and module-resolution work. A native Rust component is a candidate when profile data identifies a CPU or memory bottleneck and compatibility tests can measure its effect.
 
 ## Keep source with the graph
 

@@ -1,0 +1,13 @@
+{
+  "name": "@arqivanta/analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@arqivanta/analyzer-python": "workspace:*",
+    "@arqivanta/analyzer-typescript": "workspace:*",
+    "@arqivanta/shared": "workspace:*",
+    "ignore": "^7.0.5"
+  }
+}

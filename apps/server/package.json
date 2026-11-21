@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@arqivanta/ai-provider": "workspace:*",
-    "@arqivanta/analyzer-typescript": "workspace:*",
+    "@arqivanta/analyzer": "workspace:*",
     "@arqivanta/core": "workspace:*",
     "@arqivanta/github-import": "workspace:*",
     "@arqivanta/provider-ollama": "workspace:*",

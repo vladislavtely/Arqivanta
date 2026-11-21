@@ -340,6 +340,12 @@ svg {
   justify-self: start;
   margin-top: 0.25rem;
 }
+.folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .import-panel label,
 .settings-form label {
   display: block;
@@ -677,6 +683,19 @@ input::placeholder {
 .tree-scroll {
   padding: 0.2rem 0.45rem 0.75rem;
 }
+.tree-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  margin-bottom: 0.45rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.tree-pagination .button {
+  min-height: 32px;
+  padding: 0.25rem;
+}
 .tree-list .tree-list {
   margin-left: 0.95rem;
 }
@@ -991,7 +1010,11 @@ input::placeholder {
 }
 
 .graph-panel {
+  --graph-legend-height: 0px;
   overflow: hidden;
+}
+.graph-panel.has-direction-legend {
+  --graph-legend-height: 35px;
 }
 .graph-toolbar {
   display: flex;
@@ -1010,6 +1033,30 @@ input::placeholder {
   color: var(--muted);
   font-size: 0.85rem;
   white-space: nowrap;
+}
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  min-height: 35px;
+  padding: 0.35rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+.graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.graph-legend span::before {
+  width: 1.4rem;
+  border-top: 2px solid currentColor;
+  content: '';
+}
+.graph-legend .incoming::before {
+  border-top-style: dashed;
 }
 .select-field {
   position: relative;
@@ -1030,8 +1077,8 @@ input::placeholder {
 .graph-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(190px, 232px);
-  min-height: 540px;
-  height: calc(100dvh - 237px);
+  min-height: 420px;
+  height: calc(100dvh - 249px - var(--graph-legend-height));
 }
 .graph-canvas {
   position: relative;
@@ -1099,6 +1146,28 @@ input::placeholder {
   display: grid;
   gap: 0.4rem;
 }
+.graph-stats {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.8rem 0;
+  font-size: 0.85rem;
+}
+.graph-stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.graph-stats dt {
+  color: var(--muted);
+}
+.graph-stats dd {
+  font-variant-numeric: tabular-nums;
+}
+.graph-inspector-actions {
+  display: grid;
+  justify-items: start;
+  gap: 0.55rem;
+}
 .graph-node {
   display: flex;
   align-items: center;
@@ -1111,6 +1180,17 @@ input::placeholder {
   border-radius: 0.6rem;
   background: #1d1927;
   color: var(--ink);
+}
+.graph-folder {
+  width: 236px;
+  height: 72px;
+  border-color: #45446a;
+  background: #1c1b2d;
+}
+.graph-folder .graph-node-icon {
+  border-color: #4e4874;
+  background: #30284b;
+  color: #d4c6ff;
 }
 .graph-node-selected {
   border: 2px solid #b8a4ff;

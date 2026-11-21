@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local-first architecture and code exploration for JavaScript and TypeScript.",
+  "description": "Local-first architecture and code exploration for JavaScript, TypeScript, and Python.",
   "packageManager": "pnpm@11.25.0",
   "engines": {
     "node": ">=24.15.0"

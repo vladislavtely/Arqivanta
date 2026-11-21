@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { analyzeRepository } from '@arqivanta/analyzer-typescript';
+import { analyzeRepository } from '@arqivanta/analyzer';
 
 if (!parentPort) throw new Error('Analysis must run in a worker.');
 

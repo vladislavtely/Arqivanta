@@ -1,7 +1,7 @@
 import path from 'node:path';
-import type { Diagnostic, FileRecord } from '@arqivanta/shared';
+import { comparePaths, isJavaScriptOrTypeScript } from '@arqivanta/shared';
+import type { Diagnostic, FileRecord, SourceFile } from '@arqivanta/shared';
 import ts from 'typescript';
-import { comparePaths, type FoundFile, isSourceFile } from './discover.ts';
 
 const recordLimit = 500;
 const parseDiagnosticLimit = 20;
@@ -77,7 +77,7 @@ function commonJsExport(expression: ts.Expression, shadowed: Set<string>) {
 }
 
 export function parseFile(
-  file: FoundFile,
+  file: SourceFile,
   report: (diagnostic: Diagnostic, syntaxError?: boolean) => void,
 ): FileRecord {
   const result: FileRecord = {
@@ -89,7 +89,7 @@ export function parseFile(
     exports: [],
     symbols: [],
   };
-  if (!isSourceFile(file.path)) return result;
+  if (!isJavaScriptOrTypeScript(file.path)) return result;
 
   const source = ts.createSourceFile(file.path, file.source, ts.ScriptTarget.Latest, true);
   const parsed = source as ts.SourceFile & {
@@ -146,6 +146,7 @@ export function parseFile(
   const shadowed = new Set<string>();
   const commonJsCalls: ts.CallExpression[] = [];
   const pending: ts.Node[] = [source];
+  const children: ts.Node[] = [];
   while (pending.length > 0) {
     const node = pending.pop();
     if (!node) break;
@@ -168,7 +169,7 @@ export function parseFile(
         add(commonJsCalls, node);
       }
     }
-    const children: ts.Node[] = [];
+    children.length = 0;
     ts.forEachChild(node, (child) => {
       children.push(child);
     });

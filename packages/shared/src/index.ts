@@ -4,6 +4,20 @@ export interface SourceRef {
   endLine: number;
 }
 
+export type SourceFile = { path: string; source: string; bytes: number };
+
+export function isJavaScriptOrTypeScript(path: string): boolean {
+  return /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(path);
+}
+
+export function isPythonSource(path: string): boolean {
+  return /\.pyi?$/.test(path);
+}
+
+export function comparePaths(a: string, b: string) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export interface ImportRecord {
   specifier: string;
   kind: string;

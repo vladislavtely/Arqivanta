@@ -44,9 +44,9 @@ importers:
       '@arqivanta/ai-provider':
         specifier: workspace:*
         version: link:../../packages/ai-provider
-      '@arqivanta/analyzer-typescript':
+      '@arqivanta/analyzer':
         specifier: workspace:*
-        version: link:../../packages/analyzer-typescript
+        version: link:../../packages/analyzer
       '@arqivanta/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -118,14 +118,35 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/analyzer-typescript:
+  packages/analyzer:
     dependencies:
+      '@arqivanta/analyzer-python':
+        specifier: workspace:*
+        version: link:../analyzer-python
+      '@arqivanta/analyzer-typescript':
+        specifier: workspace:*
+        version: link:../analyzer-typescript
       '@arqivanta/shared':
         specifier: workspace:*
         version: link:../shared
       ignore:
         specifier: ^7.0.5
         version: 7.0.16
+
+  packages/analyzer-python:
+    dependencies:
+      '@arqivanta/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@lezer/python':
+        specifier: 1.1.18
+        version: 1.1.18
+
+  packages/analyzer-typescript:
+    dependencies:
+      '@arqivanta/shared':
+        specifier: workspace:*
+        version: link:../shared
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
@@ -517,6 +538,18 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lezer/common@1.5.6':
+    resolution: {integrity: sha512-NZxu3q49ck+YYbEJPuIPIyFP37XneBvzPIarBHEXBLBVfkZqQieZ/Y2boYnGNYtmjpOZLnAKs/lwqtmDpi365w==}
+
+  '@lezer/highlight@1.2.5':
+    resolution: {integrity: sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==}
+
+  '@lezer/lr@1.4.12':
+    resolution: {integrity: sha512-On9HU4oMMiHPMkQDgoTnGahjgG5n/MkN38CgG77sMraKLL+3JBbeQNi1FcCXV9QRqwF9/BUXP3caHyJC1fBOTQ==}
+
+  '@lezer/python@1.1.18':
+    resolution: {integrity: sha512-31FiUrU7z9+d/ElGQLJFXl+dKOdx0jALlP3KEOsGTex8mvj+SoE1FgItcHWK/axkxCHGUSpqIHt6JAWfWu9Rhg==}
 
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
@@ -2332,6 +2365,22 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.3
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@lezer/common@1.5.6': {}
+
+  '@lezer/highlight@1.2.5':
+    dependencies:
+      '@lezer/common': 1.5.6
+
+  '@lezer/lr@1.4.12':
+    dependencies:
+      '@lezer/common': 1.5.6
+
+  '@lezer/python@1.1.18':
+    dependencies:
+      '@lezer/common': 1.5.6
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.12
 
   '@lukeed/ms@2.0.2': {}
 
