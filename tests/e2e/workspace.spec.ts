@@ -61,11 +61,10 @@ test('opens a folder graph, moves and resets a node, and highlights both import 
   const initialPosition = await notes.evaluate(
     (element) => (element as HTMLElement).style.transform,
   );
-  const box = (await notes.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 78, box.y + box.height / 2 + 65, { steps: 8 });
-  await page.mouse.up();
+  await notes.dragTo(graph.locator('.react-flow__pane'), {
+    targetPosition: { x: 90, y: 80 },
+    steps: 8,
+  });
   const reset = page.getByRole('button', { name: 'Reset layout' });
   await expect(reset).toBeEnabled();
   await expect
