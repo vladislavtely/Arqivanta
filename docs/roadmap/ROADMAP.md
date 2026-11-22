@@ -9,10 +9,11 @@
 | 4. Optional AI         | Configure a model, cite the submitted file range, reject unapproved remote requests and keep credentials ephemeral.                              |
 | 5. GitHub import       | Import a bounded public snapshot, retain its SHA and use the local cache for repeated analysis.                                                  |
 | 6. Release preparation | Export Markdown and JSON. Verify the critical user flow and exercise CI on Windows, macOS and Linux. Prepare publication for operator approval.  |
+| 7. Repository AI       | Discover local models, retrieve bounded snapshot evidence, stream and stop answers, and open verified line ranges in the explorer.               |
 
 ## Next priorities
 
 1. Add incremental reanalysis that detects changed and removed files and keeps the active selection.
-2. Expand full-project source search and improve module resolution in monorepos.
+2. Evaluate retrieval quality on larger projects and improve module resolution in monorepos.
 3. Add additional language parsers through the same discovery and snapshot pipeline. Choose the next language based on the repositories users want to explore.
 4. Profile large real repositories and compare native parsers or indexing components where CPU use or memory limits dominate.

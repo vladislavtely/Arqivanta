@@ -1,21 +1,33 @@
-import type { SourceRef } from '@arqivanta/shared';
+import { isPythonSource, type SourceRef } from '@arqivanta/shared';
 import { AiProviderError } from './errors.ts';
 import { parseAiEndpoint } from './transport.ts';
 
 export { AiProviderError } from './errors.ts';
-export { parseAiEndpoint, requestProviderJson } from './transport.ts';
+export { parseAiEndpoint, requestProviderJson, requestProviderModelList } from './transport.ts';
+export { requestProviderEvents } from './stream.ts';
 
-export interface AiProviderInput {
+export interface AiConnectionInput {
   endpoint: string;
-  model: string;
   apiKey?: string;
-  prompt: string;
   consent?: boolean;
   signal?: AbortSignal;
 }
 
+export interface AiProviderInput extends AiConnectionInput {
+  model: string;
+  prompt: string;
+}
+
+export interface AiStreamInput extends AiProviderInput {
+  instructions: string;
+  contextWindow: number;
+  outputTokens: number;
+}
+
 export interface AiProvider {
   complete(input: AiProviderInput): Promise<string>;
+  discover(input: AiConnectionInput): Promise<string[] | null>;
+  stream(input: AiStreamInput): AsyncIterable<string>;
 }
 
 export type ExplanationRequest = Omit<AiProviderInput, 'prompt'> & {
@@ -32,11 +44,31 @@ export const explanationInstructions = [
   'Do not add file or line citations. The application displays verified source references.',
 ].join(' ');
 
+export function readModelNames(
+  models: unknown,
+  readName: (model: Record<string, unknown>) => unknown,
+): string[] {
+  if (!Array.isArray(models)) {
+    throw new AiProviderError('The AI provider did not return a valid model list.');
+  }
+
+  const names = new Set<string>();
+  for (const entry of models as unknown[]) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const name = readName(entry as Record<string, unknown>);
+    if (typeof name !== 'string' || /\p{Cc}/u.test(name)) continue;
+    const trimmed = name.trim();
+    if (trimmed && trimmed.length <= 200) names.add(trimmed);
+    if (names.size === 500) break;
+  }
+  return [...names];
+}
+
 const MAX_EXCERPT_LINES = 120;
 const MAX_EXCERPT_CHARS = 10_000;
 
 export async function explainSource(
-  provider: AiProvider,
+  provider: Pick<AiProvider, 'complete'>,
   request: ExplanationRequest,
 ): Promise<{ text: string; references: SourceRef[] }> {
   const { endpoint, model, apiKey, consent, path, content, signal } = request;
@@ -46,7 +78,7 @@ export async function explainSource(
   }
   if (!content.trim()) throw new AiProviderError('The selected file has no source to explain.');
 
-  const lines = content.split(/\r\n|\n|\r/u);
+  const lines = content.split(isPythonSource(path) ? /\r\n|[\r\n]/u : /\r\n|[\r\n\u2028\u2029]/u);
   const startLine = request.startLine ?? 1;
   const endLine = request.endLine ?? lines.length;
   if (

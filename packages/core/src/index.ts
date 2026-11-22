@@ -2,6 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { AnalysisResult, ProjectAnalysis, ProjectSummary, SourceRef } from '@arqivanta/shared';
 
+export {
+  estimateRepositoryTokens,
+  hasSensitiveAiSource,
+  isSensitiveAiPath,
+  retrieveRepositoryContext,
+  verifyRepositoryCitations,
+} from './repository-context.ts';
+
 type ProjectOrigin = Pick<ProjectSummary, 'name' | 'origin' | 'commitSha' | 'repositoryUrl'>;
 
 export function openProjectStore(filename: string) {
@@ -34,6 +42,12 @@ export function openProjectStore(filename: string) {
   const sourceByPath = database.prepare(
     'SELECT content FROM project_sources WHERE project_id = ? AND path = ?',
   );
+  const sourceRows = database.prepare(
+    'SELECT path, content FROM project_sources WHERE project_id = ? ORDER BY path',
+  );
+  const legacySources = database.prepare(
+    "SELECT sources FROM projects WHERE id = ? AND sources <> '{}'",
+  );
   const legacySourceByPath = database.prepare(`
     SELECT source.value AS content FROM projects, json_each(projects.sources) AS source
     WHERE projects.id = ? AND projects.sources <> '{}' AND source.key = ? AND source.type = 'text'
@@ -47,6 +61,11 @@ export function openProjectStore(filename: string) {
       SELECT id FROM projects ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 16
     )
   `);
+
+  function readLegacySources(id: string) {
+    const row = legacySources.get(id);
+    return row ? (JSON.parse(row.sources as string) as Record<string, unknown>) : {};
+  }
 
   return {
     list(): ProjectSummary[] {
@@ -63,6 +82,29 @@ export function openProjectStore(filename: string) {
     source(id: string, path: string): string | undefined {
       const row = sourceByPath.get(id, path) ?? legacySourceByPath.get(id, path);
       return row?.content as string | undefined;
+    },
+    *sourceEntries(id: string): IterableIterator<[path: string, content: string]> {
+      let indexed = false;
+      for (const row of sourceRows.iterate(id)) {
+        indexed = true;
+        yield [row.path as string, row.content as string];
+      }
+      if (indexed) return;
+      const entries = readLegacySources(id);
+      for (const path of Object.keys(entries).sort()) {
+        const content = entries[path];
+        if (typeof content === 'string') yield [path, content];
+      }
+    },
+    sourceReader(id: string) {
+      let legacy: Record<string, unknown> | undefined;
+      return (path: string): string | undefined => {
+        const indexed = sourceByPath.get(id, path);
+        if (indexed) return indexed.content as string;
+        legacy ??= readLegacySources(id);
+        const content = Object.hasOwn(legacy, path) ? legacy[path] : undefined;
+        return typeof content === 'string' ? content : undefined;
+      };
     },
     save(origin: ProjectOrigin, result: AnalysisResult, cacheKey?: string): ProjectAnalysis {
       const { sources, ...analysis } = result;

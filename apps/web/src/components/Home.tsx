@@ -191,8 +191,8 @@ export function Home({ projects, canBrowseFolders, pending, error, onImport, onO
         )}
       </section>
       <footer className="home-footer">
-        <LockKeyhole size={14} aria-hidden="true" /> Analysis runs locally. AI explanations are off
-        by default.
+        <LockKeyhole size={14} aria-hidden="true" /> Analysis runs locally. AI features are off by
+        default.
       </footer>
     </div>
   );

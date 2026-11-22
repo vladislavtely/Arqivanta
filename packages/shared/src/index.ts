@@ -4,6 +4,35 @@ export interface SourceRef {
   endLine: number;
 }
 
+export interface RepositoryCitation extends SourceRef {
+  id: string;
+}
+
+export interface RepositoryContextExcerpt extends RepositoryCitation {
+  source: string;
+}
+
+export interface RepositoryContext {
+  snapshotId: string;
+  excerpts: RepositoryContextExcerpt[];
+  dependencies: { source: string; target: string; evidence: string }[];
+  estimatedTokens: number;
+}
+
+export type RepositoryStreamEvent =
+  | { type: 'context'; context: RepositoryContext }
+  | { type: 'delta'; text: string }
+  | { type: 'done'; text: string; citations: RepositoryCitation[] }
+  | { type: 'error'; message: string };
+
+export const repositoryAiLimits = {
+  minContextWindow: 2_048,
+  maxContextWindow: 32_768,
+  defaultContextWindow: 8_192,
+  maxQuestionLength: 1_500,
+  maxPriorQuestions: 3,
+} as const;
+
 export type SourceFile = { path: string; source: string; bytes: number };
 
 export function isJavaScriptOrTypeScript(path: string): boolean {

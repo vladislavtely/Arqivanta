@@ -10,7 +10,10 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { api, errorMessage, post, projectRoute } from './api';
-import { AI, initialAISettings } from './components/AI';
+import { AI } from './components/AI';
+import type { AssistantView } from './components/AI';
+import { connectionChanged, initialAISettings } from './components/ai-settings';
+import type { AISettings } from './components/ai-settings';
 import { Architecture } from './components/Architecture';
 import { Explorer } from './components/Explorer';
 import type { FileSelection } from './components/Explorer';
@@ -23,7 +26,7 @@ const navigation = [
   { id: 'home', label: 'Overview', Icon: LayoutGrid },
   { id: 'explorer', label: 'Repository Explorer', Icon: FolderOpen },
   { id: 'graph', label: 'Architecture Map', Icon: Network },
-  { id: 'ai', label: 'AI Explanations', Icon: Sparkles },
+  { id: 'ai', label: 'Repository AI Assistant', Icon: Sparkles },
   { id: 'export', label: 'Export Center', Icon: Download },
 ] as const;
 
@@ -38,7 +41,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selection, setSelection] = useState<FileSelection>();
-  const [settings, setSettings] = useState(initialAISettings);
+  const [assistantView, setAssistantView] = useState<AssistantView>('ask');
+  const [ai, setAI] = useState({ settings: initialAISettings, revision: 0, connection: 0 });
   const title = navigation.find((item) => item.id === view)?.label ?? 'Overview';
 
   useEffect(() => {
@@ -96,6 +100,14 @@ export function App() {
   function openFile(file: FileSelection) {
     setSelection(file);
     setView('explorer');
+  }
+
+  function updateAISettings(settings: AISettings) {
+    setAI((previous) => ({
+      settings,
+      revision: previous.revision + 1,
+      connection: previous.connection + Number(connectionChanged(previous.settings, settings)),
+    }));
   }
 
   return (
@@ -174,16 +186,22 @@ export function App() {
               }}
             />
           )}
-          {view === 'ai' && (
+          <div hidden={view !== 'ai'}>
             <AI
+              key={analysis?.project.id}
+              active={view === 'ai'}
+              view={assistantView}
+              onView={setAssistantView}
               analysis={analysis}
               selection={selection}
-              settings={settings}
-              onSettings={setSettings}
+              settings={ai.settings}
+              settingsRevision={ai.revision}
+              connectionRevision={ai.connection}
+              onSettings={updateAISettings}
               onSelect={setSelection}
               onOpen={openFile}
             />
-          )}
+          </div>
           {view !== 'home' && view !== 'ai' && !analysis && (
             <NoProject onOpen={() => setView('home')} />
           )}
@@ -193,7 +211,10 @@ export function App() {
               analysis={analysis}
               selection={selection}
               onSelect={setSelection}
-              onExplain={() => setView('ai')}
+              onExplain={() => {
+                setAssistantView('explain');
+                setView('ai');
+              }}
             />
           )}
           {view === 'graph' && analysis && (

@@ -36,3 +36,12 @@ Run the GitHub Actions matrix against the intended release commit after publicat
 - Dense snapshots open in a folder overview with one directed link per pair of connected folders. Users can inspect cross-folder imports or open a folder to see its files. Reciprocal connection counts are offset for readability.
 - Selecting a file or folder highlights outgoing imports with a solid cyan stroke and incoming imports with a dashed amber stroke. File focus shows only direct imports and importers. Nodes can be dragged within the active layout and reset to automatic positions.
 - A generated snapshot with 138 files and 404 dependencies showed three folders and three directional folder connections. Browser coverage verifies dragging, resetting, folder navigation, and both import directions.
+
+## Repository AI Assistant
+
+- **Ask Repository** offers local context preview, model discovery for Ollama and OpenAI-compatible endpoints, streamed answers, and upstream cancellation. The **Explain a file** tab still accepts a selected file and line range. AI remains opt-in and remote discovery and inference require separate consent.
+- Retrieval ranks analyzed paths, symbols and source, then adds nearby verified import evidence. It streams source rows from SQLite and selects up to 12 nonoverlapping excerpts within the token budget. On a generated Windows snapshot with 10,000 files and 32.3 MB of source, retrieval took roughly 0.29–0.44 seconds across rare, absent and common query terms.
+- Citation IDs are resolved against the same snapshot and the exact ranges supplied to the provider. The explorer highlights those ranges. The test fixtures cover snapshot expiry, fabricated citation IDs, sensitive paths, untrusted source instructions, and cancellation without a model installation.
+- Windows verification passed lint, formatting, the production build, 60 Vitest tests and eight Playwright scenarios in Chrome. A local Ollama smoke test with the installed `qwen2.5-coder:3b` model streamed an answer about Field Notes and returned two verified source ranges.
+- Repository chat now resets a two-minute inactivity timer as provider data arrives. A loopback fixture finished with a verified source citation after 65 seconds. Windows passed 62 Vitest tests and all eight Chrome scenarios after the change.
+- Verified citations show the file path and exact line range beside the cited statement. The Chrome chat scenario checks both inline placement and the first and last highlighted source lines.

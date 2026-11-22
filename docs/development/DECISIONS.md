@@ -18,4 +18,4 @@ SQLite stores the recent analyses and their source snapshots together. This pres
 
 ## Treat AI as an explicit action
 
-Providers share a bounded request contract. Explanations use one excerpt and expose its verified line range separately from model-generated text. The browser holds provider settings and credentials only for the current session. Sending code to remote inference requires an explicit setting.
+Providers share a bounded request contract. Explanations use one excerpt and expose its verified range. Repository chat uses deterministic lexical and one-hop dependency retrieval over the current snapshot. Each selected excerpt receives an ID scoped to that question. The server verifies claimed IDs against the submitted ranges, and the explorer opens the immutable snapshot. The browser keeps settings, credentials, and chat in memory. Each remote discovery or generation request requires consent.

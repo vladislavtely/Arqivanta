@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ProjectAnalysis } from '@arqivanta/shared';
+import type { ProjectAnalysis, RepositoryContext } from '@arqivanta/shared';
 import { createApp } from './app.ts';
 
 const exampleRoot = fileURLToPath(new URL('../../../examples/field-notes', import.meta.url));
@@ -168,5 +168,80 @@ describe('loopback API', () => {
       payload: { url: 'http://127.0.0.1/admin' },
     });
     expect(arbitraryUrl.statusCode).toBe(400);
+  });
+
+  it('requires AI opt-in and consent while keeping context preview local to one snapshot', async () => {
+    const api = setup();
+    const imported = await api.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers,
+      payload: { example: true },
+    });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const { project } = imported.json<ProjectAnalysis>();
+    const preview = {
+      method: 'POST',
+      url: `/api/projects/${project.id}/ai-context`,
+      headers,
+      payload: { enabled: true, question: 'Where is createFieldReport defined?' },
+    } as const;
+    const settings = {
+      enabled: true,
+      provider: 'openai-compatible',
+      endpoint: 'https://example.invalid/v1',
+    };
+    const ask = {
+      method: 'POST',
+      url: `/api/projects/${project.id}/ask`,
+      headers,
+      payload: { ...preview.payload, ...settings, model: 'test-model' },
+    } as const;
+
+    for (const request of [
+      preview,
+      ask,
+      { method: 'POST', url: '/api/ai/models', headers, payload: settings } as const,
+    ]) {
+      const disabled = await api.inject({
+        ...request,
+        payload: { ...request.payload, enabled: false },
+      });
+      expect(disabled.statusCode).toBe(403);
+    }
+    const remote = await api.inject(ask);
+    expect(remote.statusCode).toBe(422);
+    expect(remote.json().message).toMatch(/consent/i);
+    const remoteDiscovery = await api.inject({
+      method: 'POST',
+      url: '/api/ai/models',
+      headers,
+      payload: settings,
+    });
+    expect(remoteDiscovery.statusCode).toBe(422);
+
+    const context = await api.inject(preview);
+    expect(context.statusCode, context.body).toBe(200);
+    expect(context.json<RepositoryContext>()).toMatchObject({
+      snapshotId: project.id,
+      excerpts: expect.arrayContaining([
+        expect.objectContaining({
+          path: 'src/index.ts',
+          source: expect.stringContaining('export function createFieldReport'),
+        }),
+      ]),
+    });
+
+    const stale = await api.inject({
+      ...ask,
+      url: '/api/projects/expired/ask',
+      payload: { ...ask.payload, endpoint: 'http://127.0.0.1:1234/v1' },
+    });
+    expect(stale.statusCode).toBe(404);
+    const oversized = await api.inject({
+      ...preview,
+      payload: { ...preview.payload, question: 'a'.repeat(1_501) },
+    });
+    expect(oversized.statusCode).toBe(400);
   });
 });

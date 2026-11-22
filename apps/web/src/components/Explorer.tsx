@@ -15,7 +15,7 @@ import {
 import { api, errorMessage, projectRoute } from '../api';
 import { ErrorNotice, Loading, fileName, plural } from './ui';
 
-export type FileSelection = { path: string; line?: number };
+export type FileSelection = { path: string; line?: number; endLine?: number };
 
 type Directory = {
   path: string;
@@ -264,9 +264,14 @@ function SourceCode({
   selection: FileSelection;
   onSelect: (selection: FileSelection) => void;
 }) {
-  const lines = useMemo(() => content.split(/\r\n|\n|\r/), [content]);
+  const lines = useMemo(
+    () => content.split(language === 'Python' ? /\r\n|[\r\n]/u : /\r\n|[\r\n\u2028\u2029]/u),
+    [content, language],
+  );
+  const [pageCursor, setPageCursor] = useState<{ selected: FileSelection; line: number }>();
+  const focusLine = pageCursor?.selected === selection ? pageCursor.line : (selection.line ?? 1);
   const page = Math.min(
-    Math.floor(((selection.line ?? 1) - 1) / linesPerPage),
+    Math.floor((focusLine - 1) / linesPerPage),
     Math.ceil(lines.length / linesPerPage) - 1,
   );
   const first = page * linesPerPage;
@@ -282,19 +287,23 @@ function SourceCode({
         ? row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2
         : 0;
     }
-  }, [selection]);
+  }, [focusLine, selection]);
 
   return (
     <>
       <div className="code-lines" ref={region} role="region" tabIndex={0} aria-label="Source code">
         {lines.slice(first, last).map((line, index) => {
           const number = first + index + 1;
-          const active = selection.line === number;
+          const active =
+            selection.line !== undefined &&
+            number >= selection.line &&
+            number <= (selection.endLine ?? selection.line);
           return (
             <div
               className={`code-line${active ? ' active' : ''}`}
               key={number}
-              ref={active ? activeRow : undefined}
+              data-line={number}
+              ref={active && number === focusLine ? activeRow : undefined}
             >
               <button
                 type="button"
@@ -320,7 +329,7 @@ function SourceCode({
             type="button"
             aria-label="Previous source page"
             disabled={page === 0}
-            onClick={() => onSelect({ path: selection.path, line: first - linesPerPage + 1 })}
+            onClick={() => setPageCursor({ selected: selection, line: first - linesPerPage + 1 })}
           >
             <ChevronLeft size={16} />
           </button>
@@ -329,7 +338,7 @@ function SourceCode({
             type="button"
             aria-label="Next source page"
             disabled={last === lines.length}
-            onClick={() => onSelect({ path: selection.path, line: last + 1 })}
+            onClick={() => setPageCursor({ selected: selection, line: last + 1 })}
           >
             <ChevronRight size={16} />
           </button>
@@ -428,7 +437,13 @@ function SourcePane({
         <span>{file.language}</span>
         <span>{plural(file.lines, 'line')}</span>
         <span>{file.bytes.toLocaleString()} bytes</span>
-        {selection.line && <span>Line {selection.line}</span>}
+        {selection.line && (
+          <span>
+            {selection.endLine && selection.endLine > selection.line
+              ? `Lines ${selection.line}–${selection.endLine}`
+              : `Line ${selection.line}`}
+          </span>
+        )}
       </footer>
     </section>
   );

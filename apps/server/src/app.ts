@@ -1,10 +1,16 @@
 import { realpath, stat } from 'node:fs/promises';
 import { basename, isAbsolute, parse } from 'node:path';
+import { Readable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
 import fastifyStatic from '@fastify/static';
-import Fastify from 'fastify';
-import { AiProviderError, explainSource } from '@arqivanta/ai-provider';
-import { exportContext, openProjectStore } from '@arqivanta/core';
+import Fastify, { type FastifyReply } from 'fastify';
+import { AiProviderError, explainSource, parseAiEndpoint } from '@arqivanta/ai-provider';
+import {
+  exportContext,
+  hasSensitiveAiSource,
+  isSensitiveAiPath,
+  openProjectStore,
+} from '@arqivanta/core';
 import {
   GitHubImportError,
   parseGitHubUrl,
@@ -13,7 +19,12 @@ import {
 } from '@arqivanta/github-import';
 import { ollamaProvider } from '@arqivanta/provider-ollama';
 import { openAiCompatibleProvider } from '@arqivanta/provider-openai-compatible';
-import type { AnalysisResult } from '@arqivanta/shared';
+import {
+  repositoryAiLimits,
+  type AnalysisResult,
+  type RepositoryStreamEvent,
+} from '@arqivanta/shared';
+import { answerRepositoryQuestion, prepareRepositoryQuestion } from './repository-assistant.ts';
 import { pickWindowsFolder } from './windows-folder-picker.ts';
 
 interface ServerOptions {
@@ -95,6 +106,72 @@ function sourcePath(value: unknown) {
   return path;
 }
 
+function requireAiEnabled(body: Record<string, unknown>) {
+  if (body.enabled !== true) throw new RequestError(403, 'Enable the AI assistant first.');
+}
+
+function aiConnection(body: Record<string, unknown>) {
+  const provider =
+    body.provider === 'ollama'
+      ? ollamaProvider
+      : body.provider === 'openai-compatible'
+        ? openAiCompatibleProvider
+        : undefined;
+  if (!provider) throw new RequestError(400, 'Choose a supported AI provider.');
+  const consent = body.consent;
+  if (consent !== undefined && typeof consent !== 'boolean') {
+    throw new RequestError(400, 'Provide valid consent.');
+  }
+  const endpoint = text(body.endpoint, 'provider endpoint', 2048);
+  const { local } = parseAiEndpoint(endpoint, consent);
+  const apiKey =
+    body.apiKey === undefined || body.apiKey === ''
+      ? undefined
+      : text(body.apiKey, 'API key', 4096);
+  return { provider, connection: { endpoint, apiKey, consent }, local };
+}
+
+function repositoryQuestion(body: Record<string, unknown>) {
+  const { minContextWindow, maxContextWindow, maxQuestionLength, maxPriorQuestions } =
+    repositoryAiLimits;
+  const contextWindow = body.contextWindow ?? repositoryAiLimits.defaultContextWindow;
+  if (
+    typeof contextWindow !== 'number' ||
+    !Number.isInteger(contextWindow) ||
+    contextWindow < minContextWindow ||
+    contextWindow > maxContextWindow
+  ) {
+    throw new RequestError(
+      400,
+      `Choose a context window from ${minContextWindow} to ${maxContextWindow} tokens.`,
+    );
+  }
+  const question = text(body.question, 'repository question', maxQuestionLength).trim();
+  const history = body.priorQuestions ?? [];
+  if (!Array.isArray(history) || history.length > maxPriorQuestions) {
+    throw new RequestError(400, 'Provide up to three prior questions.');
+  }
+  const priorQuestions = history.map((item: unknown) =>
+    text(item, 'prior repository question', maxQuestionLength).trim(),
+  );
+  return { question, priorQuestions, contextWindow };
+}
+
+function bindAiRequest(reply: FastifyReply, shutdown: AbortSignal) {
+  const client = new AbortController();
+  const cancel = () => client.abort();
+  reply.raw.once('close', cancel);
+  if (reply.raw.destroyed) cancel();
+  return {
+    signal: AbortSignal.any([client.signal, shutdown]),
+    release: () => reply.raw.off('close', cancel),
+  };
+}
+
+function streamEvent(event: RepositoryStreamEvent) {
+  return `${JSON.stringify(event)}\n`;
+}
+
 async function localRoot(input: unknown) {
   const path = text(input, 'absolute project folder path', 4096);
   if (!isAbsolute(path) || (process.platform === 'win32' && !/^[A-Za-z]:[\\/]/.test(path))) {
@@ -123,10 +200,15 @@ export function createApp({
   const store = openProjectStore(database);
   const allowedHosts = new Set([`127.0.0.1:${apiPort}`, '127.0.0.1:5173']);
   const folderPickerShutdown = new AbortController();
+  const aiShutdown = new AbortController();
   let importing = false;
-  let explaining = false;
+  let generating = false;
+  let discovering = false;
 
-  app.addHook('preClose', async () => folderPickerShutdown.abort());
+  app.addHook('preClose', async () => {
+    folderPickerShutdown.abort();
+    aiShutdown.abort();
+  });
   app.addHook('onClose', async () => store.close());
   app.addHook('onRequest', async (request, reply) => {
     const { host, origin, 'sec-fetch-site': fetchSite } = request.headers;
@@ -298,50 +380,111 @@ export function createApp({
       return reply.send(exportContext(getProject(params.id), format));
     },
   );
+  app.post('/api/ai/models', async ({ body: input }, reply) => {
+    const body = record(input);
+    requireAiEnabled(body);
+    const { provider, connection, local } = aiConnection(body);
+    if (discovering)
+      throw new RequestError(409, 'Wait for the current connection check to finish.');
+    const request = bindAiRequest(reply, aiShutdown.signal);
+    discovering = true;
+    try {
+      return { local, models: await provider.discover({ ...connection, signal: request.signal }) };
+    } finally {
+      request.release();
+      discovering = false;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/ai-context',
+    async ({ params, body: input }) => {
+      const body = record(input);
+      requireAiEnabled(body);
+      return prepareRepositoryQuestion(store, getProject(params.id), repositoryQuestion(body))
+        .context;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/ask',
+    async ({ params, body: input }, reply) => {
+      const body = record(input);
+      requireAiEnabled(body);
+      const { provider, connection } = aiConnection(body);
+      const model = text(body.model, 'model name', 200).trim();
+      const question = repositoryQuestion(body);
+      if (generating) throw new RequestError(409, 'Wait for the current AI response to finish.');
+      const analysis = getProject(params.id);
+      const prepared = prepareRepositoryQuestion(store, analysis, question);
+      const request = bindAiRequest(reply, aiShutdown.signal);
+      generating = true;
+
+      async function* events() {
+        try {
+          for await (const event of answerRepositoryQuestion(
+            store,
+            analysis,
+            provider,
+            { ...connection, model, signal: request.signal },
+            question.contextWindow,
+            prepared,
+          )) {
+            if (request.signal.aborted) return;
+            yield streamEvent(event);
+          }
+        } catch (error) {
+          if (request.signal.aborted) return;
+          const message =
+            error instanceof AiProviderError
+              ? error.message
+              : 'The repository answer could not be completed.';
+          yield streamEvent({ type: 'error', message });
+        }
+      }
+
+      const stream = Readable.from(events());
+      stream.once('close', () => {
+        request.release();
+        generating = false;
+      });
+      return reply.type('application/x-ndjson; charset=utf-8').send(stream);
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     '/api/projects/:id/explain',
     async ({ params, body: input }, reply) => {
       const body = record(input);
-      const provider =
-        body.provider === 'ollama'
-          ? ollamaProvider
-          : body.provider === 'openai-compatible'
-            ? openAiCompatibleProvider
-            : undefined;
-      if (!provider) throw new RequestError(400, 'Choose a supported AI provider.');
-      if (body.consent !== undefined && typeof body.consent !== 'boolean')
-        throw new RequestError(400, 'Provide valid consent.');
+      const { provider, connection } = aiConnection(body);
       const path = sourcePath(body.path);
-      const endpoint = text(body.endpoint, 'provider endpoint', 2048);
       const model = text(body.model, 'model name', 200);
-      const apiKey =
-        body.apiKey === undefined || body.apiKey === ''
-          ? undefined
-          : text(body.apiKey, 'API key', 4096);
       const startLine = line(body.startLine);
       const endLine = line(body.endLine);
-      if (explaining) throw new RequestError(409, 'Wait for the current explanation to finish.');
+      if (generating) throw new RequestError(409, 'Wait for the current AI response to finish.');
+      if (isSensitiveAiPath(path))
+        throw new RequestError(400, 'Source in sensitive paths is excluded from AI requests.');
       const content = getSource(params.id, path);
-      const client = new AbortController();
-      const cancel = () => client.abort();
-      const signal = AbortSignal.any([client.signal, AbortSignal.timeout(60_000)]);
-      reply.raw.once('close', cancel);
-      explaining = true;
+      if (hasSensitiveAiSource(content))
+        throw new RequestError(
+          400,
+          'This file appears to contain credentials and is excluded from AI requests.',
+        );
+      const request = bindAiRequest(reply, aiShutdown.signal);
+      generating = true;
       try {
         return await explainSource(provider, {
+          ...connection,
           path,
           content,
-          endpoint,
           model,
-          apiKey,
-          consent: body.consent,
           startLine,
           endLine,
-          signal,
+          signal: request.signal,
         });
       } finally {
-        reply.raw.off('close', cancel);
-        explaining = false;
+        request.release();
+        generating = false;
       }
     },
   );
