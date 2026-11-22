@@ -11,7 +11,7 @@ Install Node.js 24.15 or newer and pnpm 11.25.0, then run the following from the
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm build
-pnpm start
+pnpm start or node .\apps\server\src\index.ts - запуск 
 ```
 
 Open [http://127.0.0.1:4317](http://127.0.0.1:4317). On Windows, choose **Browse folders**, navigate to a project in the Windows folder dialog, and choose **Select folder**. Analysis starts automatically. You can also enter an absolute folder path, choose **Open example** to explore Field Notes, or use **Import from GitHub** with a public `https://github.com/owner/repository` URL. For development, run `pnpm dev` and open [http://127.0.0.1:5173](http://127.0.0.1:5173).
