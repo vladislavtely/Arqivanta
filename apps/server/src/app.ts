@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, parse } from 'node:path';
 import { Readable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
@@ -7,9 +8,13 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { AiProviderError, explainSource, parseAiEndpoint } from '@arqivanta/ai-provider';
 import {
   exportContext,
+  buildCodeTrace,
+  compareSnapshots,
   hasSensitiveAiSource,
   isSensitiveAiPath,
   openProjectStore,
+  reviewSavedTrace,
+  traceFingerprints,
 } from '@arqivanta/core';
 import {
   GitHubImportError,
@@ -22,9 +27,12 @@ import { openAiCompatibleProvider } from '@arqivanta/provider-openai-compatible'
 import {
   repositoryAiLimits,
   type AnalysisResult,
+  type FlowAnchor,
+  type ProjectAnalysis,
   type RepositoryStreamEvent,
 } from '@arqivanta/shared';
 import { answerRepositoryQuestion, prepareRepositoryQuestion } from './repository-assistant.ts';
+import { GitBaselineError, readGitHead } from './git-baseline.ts';
 import { pickWindowsFolder } from './windows-folder-picker.ts';
 
 interface ServerOptions {
@@ -44,10 +52,13 @@ class RequestError extends Error {
   }
 }
 
-function analyze(root: string): Promise<AnalysisResult> {
+function analyze(root: string, previous?: ProjectAnalysis): Promise<AnalysisResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./analysis-worker.ts', import.meta.url), {
-      workerData: root,
+      workerData: {
+        root,
+        baseline: previous && { files: previous.files, parseVersion: previous.parseVersion },
+      },
       execArgv: [],
       resourceLimits: { maxOldGenerationSizeMb: 224, stackSizeMb: 4 },
     });
@@ -104,6 +115,10 @@ function sourcePath(value: unknown) {
     throw new RequestError(400, 'Use a path relative to the selected project.');
   }
   return path;
+}
+
+function flowAnchor(body: Record<string, unknown>): FlowAnchor {
+  return { path: sourcePath(body.path), key: text(body.key, 'route or function', 512) };
 }
 
 function requireAiEnabled(body: Record<string, unknown>) {
@@ -255,6 +270,7 @@ export function createApp({
       return reply.code(status ?? 502).send({ message: error.message });
     }
     if (error instanceof AiProviderError) return reply.code(422).send({ message: error.message });
+    if (error instanceof GitBaselineError) return reply.code(422).send({ message: error.message });
     if (error.statusCode && error.statusCode < 500) {
       return reply.code(error.statusCode).send({ message: 'The request could not be read.' });
     }
@@ -285,7 +301,7 @@ export function createApp({
     importing = true;
     try {
       if (body.example === true) {
-        const key = 'example:field-notes:v1';
+        const key = 'example:field-notes:v2';
         return (
           store.cached(key) ??
           store.save({ name: 'Field Notes', origin: 'example' }, await analyze(exampleRoot), key)
@@ -315,14 +331,19 @@ export function createApp({
           }
         }
         const root = await localRoot(selectedPath);
-        return store.save({ name: basename(root), origin: 'local' }, await analyze(root));
+        return store.save(
+          { name: basename(root), origin: 'local' },
+          await analyze(root),
+          undefined,
+          root,
+        );
       }
       if (Object.hasOwn(body, 'url')) {
         const input = text(body.url, 'public GitHub repository URL', 2048);
         const repo = parseGitHubUrl(input);
         const deadline = AbortSignal.timeout(90_000);
         const commitSha = await resolveGitHubRevision(repo, deadline);
-        const cacheKey = `github:v2:${repo.url.toLowerCase()}:${commitSha}`;
+        const cacheKey = `github:v3:${repo.url.toLowerCase()}:${commitSha}`;
         return (
           store.cached(cacheKey) ??
           (await withGitHubSnapshot(
@@ -358,6 +379,178 @@ export function createApp({
 
   app.get<{ Params: { id: string } }>('/api/projects/:id', async ({ params }) =>
     getProject(params.id),
+  );
+
+  app.post<{ Params: { id: string } }>('/api/projects/:id/refresh', async ({ params }) => {
+    const previous = getProject(params.id);
+    const directory = store.workspaceRoot(params.id);
+    if (!previous.project.canRefresh || !directory)
+      throw new RequestError(400, 'Open the local working folder to refresh its snapshot.');
+    if (importing) throw new RequestError(409, 'Wait for the current import to finish.');
+    importing = true;
+    try {
+      const root = await localRoot(directory);
+      if (root !== directory)
+        throw new RequestError(400, 'The working folder has moved. Open it again.');
+      const result = await analyze(root, previous);
+      return store.save(
+        { name: basename(root), origin: 'local' },
+        result,
+        undefined,
+        root,
+        params.id,
+      );
+    } finally {
+      importing = false;
+    }
+  });
+
+  function compare(baseline: ProjectAnalysis, current: ProjectAnalysis) {
+    return compareSnapshots(
+      baseline,
+      current,
+      store.sourceReader(baseline.project.id),
+      store.sourceReader(current.project.id),
+    );
+  }
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/baselines', async ({ params }) => {
+    const { project } = getProject(params.id);
+    const scope = store.scope(project);
+    return store.list().filter((item) => item.id !== project.id && store.scope(item) === scope);
+  });
+  app.get<{ Params: { id: string }; Querystring: { baseline?: unknown } }>(
+    '/api/projects/:id/compare',
+    async ({ params, query }) => {
+      const current = getProject(params.id);
+      const baseline = getProject(text(query.baseline, 'baseline snapshot', 100));
+      if (store.scope(current.project) !== store.scope(baseline.project))
+        throw new RequestError(400, 'Choose a snapshot from the same repository.');
+      return compare(baseline, current);
+    },
+  );
+  app.post<{ Params: { id: string } }>('/api/projects/:id/compare-head', async ({ params }) => {
+    const current = getProject(params.id);
+    const directory = store.workspaceRoot(params.id);
+    if (!directory || !current.project.canRefresh)
+      throw new RequestError(400, 'Open a local Git working folder to compare with HEAD.');
+    if (importing) throw new RequestError(409, 'Wait for the current import to finish.');
+    importing = true;
+    try {
+      const root = await localRoot(directory);
+      if (root !== directory)
+        throw new RequestError(400, 'The working folder has moved. Open it again.');
+      const git = await readGitHead(root);
+      const cacheKey = `git-head:v1:${store.scope(current.project)}:${git.commit}`;
+      const baseline =
+        store.cached(cacheKey) ??
+        (await git.snapshot(async (snapshot) =>
+          store.save(
+            { name: current.project.name, origin: 'local', commitSha: git.commit },
+            await analyze(snapshot, current),
+            cacheKey,
+            root,
+            params.id,
+          ),
+        ));
+      return compare(baseline, current);
+    } finally {
+      importing = false;
+    }
+  });
+
+  function requiredTrace(analysis: ProjectAnalysis, anchor: FlowAnchor) {
+    const trace = buildCodeTrace(analysis, anchor);
+    if (!trace)
+      throw new RequestError(404, 'This route or function is unavailable in the snapshot.');
+    return trace;
+  }
+  app.get<{ Params: { id: string }; Querystring: Record<string, unknown> }>(
+    '/api/projects/:id/trace',
+    async ({ params, query }) => requiredTrace(getProject(params.id), flowAnchor(query)),
+  );
+  app.get<{ Params: { id: string } }>('/api/projects/:id/traces', async ({ params }) =>
+    store.listTraces(getProject(params.id).project),
+  );
+  app.post<{ Params: { id: string } }>('/api/projects/:id/traces', async ({ params, body }) => {
+    const analysis = getProject(params.id);
+    const input = record(body);
+    const anchor = flowAnchor(input);
+    const title = text(input.title, 'trace title', 100).trim();
+    const trace = requiredTrace(analysis, anchor);
+    const saved = {
+      id: randomUUID(),
+      title,
+      snapshotId: params.id,
+      anchor,
+      trace,
+      fingerprints: traceFingerprints(trace, store.sourceReader(params.id)),
+    };
+    if (!store.saveTrace(analysis.project, saved))
+      throw new RequestError(409, 'The saved trace limit is reached. Remove a trace to make room.');
+    return saved;
+  });
+  app.get<{ Params: { id: string; traceId: string } }>(
+    '/api/projects/:id/traces/:traceId',
+    async ({ params }) => {
+      const analysis = getProject(params.id);
+      const saved = store.getTrace(analysis.project, params.traceId);
+      if (!saved) throw new RequestError(404, 'This saved trace is unavailable.');
+      return reviewSavedTrace(
+        saved,
+        buildCodeTrace(analysis, saved.anchor),
+        store.sourceReader(params.id),
+        store.has,
+      );
+    },
+  );
+  app.post<{ Params: { id: string; traceId: string } }>(
+    '/api/projects/:id/traces/:traceId',
+    async ({ params, body }) => {
+      const analysis = getProject(params.id);
+      const saved = store.getTrace(analysis.project, params.traceId);
+      if (!saved) throw new RequestError(404, 'This saved trace is unavailable.');
+      const trace = requiredTrace(analysis, saved.anchor);
+      const read = store.sourceReader(params.id);
+      const { stepId } = record(body);
+      let updated;
+      if (stepId === undefined) {
+        updated = {
+          ...saved,
+          snapshotId: params.id,
+          trace,
+          fingerprints: traceFingerprints(trace, read),
+          stepSnapshots: undefined,
+        };
+      } else {
+        const stepKey = text(stepId, 'trace step', 64);
+        const step = trace.steps.find(({ id }) => id === stepKey);
+        if (!step || !Object.hasOwn(saved.fingerprints, stepKey))
+          throw new RequestError(404, 'This step is unavailable in both trace versions.');
+        updated = {
+          ...saved,
+          trace: {
+            ...saved.trace,
+            steps: saved.trace.steps.map((previous) => (previous.id === stepKey ? step : previous)),
+          },
+          fingerprints: {
+            ...saved.fingerprints,
+            ...traceFingerprints({ ...trace, steps: [step] }, read),
+          },
+          stepSnapshots: { ...saved.stepSnapshots, [stepKey]: params.id },
+        };
+      }
+      store.saveTrace(analysis.project, updated);
+      return reviewSavedTrace(updated, trace, read, store.has);
+    },
+  );
+  app.delete<{ Params: { id: string; traceId: string } }>(
+    '/api/projects/:id/traces/:traceId',
+    async ({ params }) => {
+      if (!store.deleteTrace(getProject(params.id).project, params.traceId))
+        throw new RequestError(404, 'This saved trace is unavailable.');
+      return { deleted: true };
+    },
   );
   app.get<{ Params: { id: string }; Querystring: { path?: unknown } }>(
     '/api/projects/:id/source',

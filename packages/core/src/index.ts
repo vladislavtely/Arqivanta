@@ -1,7 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { AnalysisResult, ProjectAnalysis, ProjectSummary, SourceRef } from '@arqivanta/shared';
+import type {
+  AnalysisResult,
+  ProjectAnalysis,
+  ProjectSummary,
+  SavedTrace,
+  SourceRef,
+} from '@arqivanta/shared';
 
+export { buildCodeTrace, reviewSavedTrace, traceFingerprints } from './code-trace.ts';
+export { compareSnapshots } from './snapshot-comparison.ts';
 export {
   estimateRepositoryTokens,
   hasSensitiveAiSource,
@@ -32,12 +40,40 @@ export function openProjectStore(filename: string) {
       content TEXT NOT NULL,
       PRIMARY KEY (project_id, path)
     ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS project_workspaces (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      root TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS saved_traces (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      document TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS saved_traces_scope ON saved_traces(scope);
   `);
 
   const recent = database.prepare(
-    'SELECT summary FROM projects ORDER BY created_at DESC, rowid DESC',
+    "SELECT summary FROM projects WHERE coalesce(cache_key, '') NOT LIKE 'git-head:%' ORDER BY created_at DESC, rowid DESC",
   );
+  const workspace = database.prepare('SELECT root FROM project_workspaces WHERE project_id = ?');
+  const saveWorkspace = database.prepare('INSERT INTO project_workspaces VALUES (?, ?)');
+  const savedTraces = database.prepare(
+    'SELECT document FROM saved_traces WHERE scope = ? ORDER BY rowid DESC',
+  );
+  const savedTrace = database.prepare(
+    'SELECT document FROM saved_traces WHERE scope = ? AND id = ?',
+  );
+  const insertTrace = database.prepare(`
+    INSERT INTO saved_traces VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET document = excluded.document WHERE excluded.scope = saved_traces.scope
+  `);
+  const traceLimit = database.prepare(`
+    SELECT EXISTS(SELECT 1 FROM saved_traces WHERE scope = ? LIMIT 1 OFFSET 11)
+      OR EXISTS(SELECT 1 FROM saved_traces LIMIT 1 OFFSET 95) AS full
+  `);
+  const deleteTrace = database.prepare('DELETE FROM saved_traces WHERE scope = ? AND id = ?');
   const byId = database.prepare('SELECT analysis FROM projects WHERE id = ?');
+  const projectExists = database.prepare('SELECT 1 FROM projects WHERE id = ?');
   const byCacheKey = database.prepare('SELECT analysis FROM projects WHERE cache_key = ?');
   const sourceByPath = database.prepare(
     'SELECT content FROM project_sources WHERE project_id = ? AND path = ?',
@@ -57,8 +93,8 @@ export function openProjectStore(filename: string) {
   `);
   const insertSource = database.prepare('INSERT INTO project_sources VALUES (?, ?, ?)');
   const trim = database.prepare(`
-    DELETE FROM projects WHERE id IN (
-      SELECT id FROM projects ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 16
+    DELETE FROM projects WHERE id NOT IN (
+      SELECT id FROM projects ORDER BY (id = ?) DESC, (id = ?) DESC, created_at DESC, rowid DESC LIMIT 16
     )
   `);
 
@@ -67,7 +103,28 @@ export function openProjectStore(filename: string) {
     return row ? (JSON.parse(row.sources as string) as Record<string, unknown>) : {};
   }
 
+  function workspaceRoot(id: string) {
+    return workspace.get(id)?.root as string | undefined;
+  }
+
+  function scope(project: ProjectSummary) {
+    const root = workspaceRoot(project.id);
+    const identity = root
+      ? `folder:${root}`
+      : project.repositoryUrl
+        ? `github:${project.repositoryUrl.toLowerCase()}`
+        : project.origin === 'example'
+          ? 'example:field-notes'
+          : `snapshot:${project.id}`;
+    return createHash('sha256').update(identity).digest('hex');
+  }
+
   return {
+    scope,
+    workspaceRoot,
+    has(id: string): boolean {
+      return Boolean(projectExists.get(id));
+    },
     list(): ProjectSummary[] {
       return recent.all().map((row) => JSON.parse(row.summary as string) as ProjectSummary);
     },
@@ -106,7 +163,30 @@ export function openProjectStore(filename: string) {
         return typeof content === 'string' ? content : undefined;
       };
     },
-    save(origin: ProjectOrigin, result: AnalysisResult, cacheKey?: string): ProjectAnalysis {
+    listTraces(project: ProjectSummary): SavedTrace[] {
+      return savedTraces
+        .all(scope(project))
+        .map((row) => JSON.parse(row.document as string) as SavedTrace);
+    },
+    getTrace(project: ProjectSummary, id: string): SavedTrace | undefined {
+      const row = savedTrace.get(scope(project), id);
+      return row ? (JSON.parse(row.document as string) as SavedTrace) : undefined;
+    },
+    saveTrace(project: ProjectSummary, trace: SavedTrace): boolean {
+      const key = scope(project);
+      if (!savedTrace.get(key, trace.id) && traceLimit.get(key)?.full) return false;
+      return insertTrace.run(trace.id, key, JSON.stringify(trace)).changes === 1;
+    },
+    deleteTrace(project: ProjectSummary, id: string) {
+      return deleteTrace.run(scope(project), id).changes === 1;
+    },
+    save(
+      origin: ProjectOrigin,
+      result: AnalysisResult,
+      cacheKey?: string,
+      root?: string,
+      retainId = '',
+    ): ProjectAnalysis {
       const { sources, ...analysis } = result;
       const project: ProjectSummary = {
         ...origin,
@@ -114,6 +194,7 @@ export function openProjectStore(filename: string) {
         createdAt: new Date().toISOString(),
         fileCount: result.files.length,
         edgeCount: result.edges.length,
+        ...(root && !cacheKey ? { canRefresh: true } : {}),
       };
       const document = { ...analysis, project };
       database.exec('BEGIN IMMEDIATE');
@@ -135,7 +216,8 @@ export function openProjectStore(filename: string) {
         for (const [path, content] of Object.entries(sources)) {
           insertSource.run(project.id, path, content);
         }
-        trim.run();
+        if (root) saveWorkspace.run(project.id, root);
+        trim.run(project.id, retainId);
         database.exec('COMMIT');
       } catch (error) {
         database.exec('ROLLBACK');

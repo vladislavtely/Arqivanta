@@ -22,10 +22,14 @@ On Windows, an already built app can also be started with `node .\apps\server\sr
 
 - **Explorer** includes a searchable file tree, numbered source, imports and exports, symbols, related files, and analysis diagnostics. Select an import to follow a resolved link. Large file trees show 250 files per page while search covers the full snapshot.
 - **Architecture Map** shows statically resolved local dependencies. Dense maps open in **Folders**, where a single link summarizes imports between two folders. Open a folder to see its files. Choose **Focus on file** to see its direct imports and importers. Outgoing links are solid and incoming links are dashed. Drag nodes to rearrange the view and use **Reset layout** to restore their positions.
+- **Code Routes** follows direct calls from named functions and recognized Fastify or FastAPI routes. Select a call site or definition to highlight its source range. Save a trace, refresh the working folder, then review and update the saved steps that changed. The initial code analysis is sufficient to use these tools offline with AI disabled.
+- **Compare changes** in Code Routes compares the open snapshot with a previous snapshot from the same project or with local Git HEAD. Refresh the snapshot to include recent working folder edits. The report shows changed files, functions, routes, import links, and evidence chains for potentially affected callers and importers. The test filter identifies test files reached through import links.
 - **Export Center** exports Markdown or JSON with file paths, entry points, verified edges and line ranges, and dependency notes. Exports omit source bodies.
 - **Repository AI Assistant** answers questions using excerpts and resolved imports from the current snapshot. The **Explain a file** tab still supports a selected file and optional line range.
 
 On large snapshots, the map shows up to 350 files and 1,200 dependencies at a time. Its counts show when the view is limited. Search operates on all files in the current scope, and the explorer and exports use the full snapshot. The analyzer scans up to 10,000 supported files or 32 MiB of source, subject to its safety and time limits.
+
+Use **Refresh snapshot** to analyze an open local folder again. Source hashes let the analyzer reuse unchanged file parses. It then resolves relationships against the new file list so added and removed modules are reflected. Open a local folder again to enable refresh for snapshots created before this feature.
 
 Open `examples/python-tasks` as a local project to try Python analysis. Arqivanta finds local imports, top-level functions and classes, and conventional entry files from `.py` and `.pyi` source.
 
@@ -50,7 +54,7 @@ GitHub imports use the public default-branch commit and record its SHA. AI start
 
 Run `pnpm lint`, `pnpm format:check`, `pnpm test`, and `pnpm build`. After a build, install a Playwright browser with `pnpm exec playwright install chromium` and run `pnpm test:e2e`. Set `ARQIVANTA_TEST_BROWSER=chrome` to use an installed copy of Google Chrome. Set `ARQIVANTA_TEST_PORT` if port `4321` is in use.
 
-Use `node scripts/benchmark-analysis.mjs 2000` to measure analysis, storage, and 100 source reads on a generated project. Use `node scripts/benchmark-analysis.mjs 10000 --api` to measure a full import through the API worker.
+Use `node scripts/benchmark-analysis.mjs 2000` to measure analysis, storage, and 100 source reads on a generated project. Use `node scripts/benchmark-analysis.mjs 10000 --api` to measure a full import through the API worker. Use `--refresh` to measure the import and a subsequent refresh after editing one file.
 
 See [architecture](docs/architecture/OVERVIEW.md), [roadmap](docs/roadmap/ROADMAP.md), [progress](docs/development/PROGRESS.md), and [contributing](CONTRIBUTING.md).
 

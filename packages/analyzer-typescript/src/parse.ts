@@ -2,6 +2,7 @@ import path from 'node:path';
 import { comparePaths, isJavaScriptOrTypeScript } from '@arqivanta/shared';
 import type { Diagnostic, FileRecord, SourceFile } from '@arqivanta/shared';
 import ts from 'typescript';
+import { readTypeScriptFlow } from './flow.ts';
 
 const recordLimit = 500;
 const parseDiagnosticLimit = 20;
@@ -144,19 +145,43 @@ export function parseFile(
   }
 
   const shadowed = new Set<string>();
+  const identifiers: ts.Identifier[] = [];
+  const calls: (ts.CallExpression | ts.NewExpression)[] = [];
+  const writes = new Set<string>();
   const commonJsCalls: ts.CallExpression[] = [];
   const pending: ts.Node[] = [source];
   const children: ts.Node[] = [];
   while (pending.length > 0) {
     const node = pending.pop();
     if (!node) break;
-    if (
-      ts.isIdentifier(node) &&
-      ['require', 'module', 'exports'].includes(node.text) &&
-      isBinding(node)
-    ) {
-      shadowed.add(node.text);
+    if (ts.isIdentifier(node) && isBinding(node)) {
+      identifiers.push(node);
+      if (['require', 'module', 'exports'].includes(node.text)) shadowed.add(node.text);
     }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      const left = node.left;
+      if (ts.isIdentifier(left)) writes.add(left.text);
+      if (
+        (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) &&
+        ts.isIdentifier(left.expression)
+      )
+        writes.add(left.expression.text);
+      if (ts.isArrayLiteralExpression(left) || ts.isObjectLiteralExpression(left))
+        for (const name of left.getText(source).matchAll(/[\p{L}_$][\p{L}\p{N}_$]*/gu))
+          writes.add(name[0]);
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      ts.isIdentifier(node.operand)
+    )
+      writes.add(node.operand.text);
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) calls.push(node);
     if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length >= 1) {
         addImport(node, node.arguments[0], 'dynamic import');
@@ -295,6 +320,10 @@ export function parseFile(
   );
   result.exports.sort((a, b) => a.startLine - b.startLine || comparePaths(a.name, b.name));
   result.symbols.sort((a, b) => a.startLine - b.startLine || comparePaths(a.name, b.name));
+  if (!parsed.parseDiagnostics?.length) {
+    const flow = readTypeScriptFlow(source, file.path, reference, { identifiers, calls, writes });
+    if (flow.length) result.flow = flow;
+  }
   if (truncated)
     report({
       severity: 'warning',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ProjectAnalysis, ProjectSummary } from '@arqivanta/shared';
+import type { FlowAnchor, ProjectAnalysis, ProjectSummary } from '@arqivanta/shared';
 import {
   Box,
   Download,
@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   LockKeyhole,
   Network,
+  Route,
   Sparkles,
 } from 'lucide-react';
 import { api, errorMessage, post, projectRoute } from './api';
@@ -15,6 +16,7 @@ import type { AssistantView } from './components/AI';
 import { connectionChanged, initialAISettings } from './components/ai-settings';
 import type { AISettings } from './components/ai-settings';
 import { Architecture } from './components/Architecture';
+import { CodeRoutes } from './components/CodeRoutes';
 import { Explorer } from './components/Explorer';
 import type { FileSelection } from './components/Explorer';
 import { Export } from './components/Export';
@@ -26,6 +28,7 @@ const navigation = [
   { id: 'home', label: 'Overview', Icon: LayoutGrid },
   { id: 'explorer', label: 'Repository Explorer', Icon: FolderOpen },
   { id: 'graph', label: 'Architecture Map', Icon: Network },
+  { id: 'routes', label: 'Code Routes', Icon: Route },
   { id: 'ai', label: 'Repository AI Assistant', Icon: Sparkles },
   { id: 'export', label: 'Export Center', Icon: Download },
 ] as const;
@@ -41,6 +44,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selection, setSelection] = useState<FileSelection>();
+  const [traceStart, setTraceStart] = useState<FlowAnchor>();
+  const [routesOpened, setRoutesOpened] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [assistantView, setAssistantView] = useState<AssistantView>('ask');
   const [ai, setAI] = useState({ settings: initialAISettings, revision: 0, connection: 0 });
   const title = navigation.find((item) => item.id === view)?.label ?? 'Overview';
@@ -76,7 +83,7 @@ export function App() {
   }, [title, view]);
 
   async function openProject(route: string, loading: string, data?: ProjectInput) {
-    if (pending) return;
+    if (pending || refreshing) return;
     setPending(loading);
     setError(null);
     try {
@@ -87,6 +94,9 @@ export function App() {
       );
       const path = entry?.path ?? result.files[0]?.path;
       setAnalysis(result);
+      setTraceStart(undefined);
+      setRoutesOpened(false);
+      setRefreshError(null);
       setSelection(path ? { path } : undefined);
       setView('explorer');
     } catch (cause) {
@@ -100,6 +110,43 @@ export function App() {
   function openFile(file: FileSelection) {
     setSelection(file);
     setView('explorer');
+  }
+
+  function openRoutes(anchor?: FlowAnchor) {
+    if (anchor) setTraceStart(anchor);
+    setRoutesOpened(true);
+    setView('routes');
+  }
+
+  async function refreshSnapshot() {
+    if (!analysis || refreshing || pending) return;
+    const previous = analysis;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const current = await api<ProjectAnalysis>(
+        `${projectRoute(previous.project.id)}/refresh`,
+        post({}),
+      );
+      setAnalysis(current);
+      setTraceStart((anchor) =>
+        current.files.some(
+          ({ path, flow }) => path === anchor?.path && flow?.some(({ key }) => key === anchor.key),
+        )
+          ? anchor
+          : undefined,
+      );
+      setSelection((active) => {
+        if (active && current.files.some((file) => file.path === active.path))
+          return { path: active.path };
+        const path = current.entryPoints[0]?.path ?? current.files[0]?.path;
+        return path ? { path } : undefined;
+      });
+    } catch (cause) {
+      setRefreshError(errorMessage(cause));
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   function updateAISettings(settings: AISettings) {
@@ -128,7 +175,7 @@ export function App() {
               key={id}
               type="button"
               aria-current={id === view ? 'page' : undefined}
-              onClick={() => setView(id)}
+              onClick={() => (id === 'routes' ? openRoutes() : setView(id))}
               title={label}
             >
               <Icon size={18} aria-hidden="true" />
@@ -215,7 +262,20 @@ export function App() {
                 setAssistantView('explain');
                 setView('ai');
               }}
+              onTrace={openRoutes}
             />
+          )}
+          {routesOpened && analysis && (
+            <div hidden={view !== 'routes'}>
+              <CodeRoutes
+                analysis={analysis}
+                initial={traceStart}
+                refreshing={refreshing}
+                refreshError={refreshError}
+                onRefresh={() => void refreshSnapshot()}
+                onOpen={openFile}
+              />
+            </div>
           )}
           {view === 'graph' && analysis && (
             <Architecture

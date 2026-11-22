@@ -354,12 +354,14 @@ function SourcePane({
   selection,
   onSelect,
   onExplain,
+  onTrace,
 }: {
   projectId: string;
   file: FileRecord;
   selection: FileSelection;
   onSelect: (selection: FileSelection) => void;
   onExplain: () => void;
+  onTrace?: () => void;
 }) {
   const [source, setSource] = useState<{ path: string; content: string }>();
   const [failure, setFailure] = useState<string>();
@@ -414,6 +416,11 @@ function SourcePane({
           <button className="button" type="button" onClick={onExplain}>
             <Sparkles size={15} aria-hidden="true" /> Explain file
           </button>
+          {onTrace && (
+            <button className="button" type="button" onClick={onTrace}>
+              Trace code
+            </button>
+          )}
         </div>
       </header>
       {clipboard && (
@@ -646,13 +653,23 @@ export function Explorer({
   selection,
   onSelect,
   onExplain,
+  onTrace,
 }: {
   analysis: ProjectAnalysis;
   selection: FileSelection | undefined;
   onSelect: (selection: FileSelection) => void;
   onExplain: () => void;
+  onTrace: (anchor: { path: string; key: string }) => void;
 }) {
   const file = analysis.files.find((item) => item.path === selection?.path);
+  const selectedLine = selection?.line;
+  const start =
+    file?.flow?.find(
+      ({ startLine, endLine }) =>
+        selectedLine !== undefined && selectedLine >= startLine && selectedLine <= endLine,
+    ) ??
+    file?.flow?.find(({ kind }) => kind === 'http') ??
+    file?.flow?.[0];
 
   return (
     <div className="page workbench-page">
@@ -675,6 +692,7 @@ export function Explorer({
             selection={selection}
             onSelect={onSelect}
             onExplain={onExplain}
+            onTrace={start ? () => onTrace({ path: start.path, key: start.key }) : undefined}
           />
         ) : (
           <section className="source-pane blank-source">

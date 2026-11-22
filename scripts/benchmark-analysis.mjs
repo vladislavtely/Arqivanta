@@ -30,10 +30,28 @@ async function benchmarkApi() {
     });
     if (response.statusCode !== 200) throw new Error(response.body);
     const { project, diagnostics } = response.json();
+    const apiImportMs = Math.round(performance.now() - start);
+    let refresh;
+    if (process.argv.includes('--refresh')) {
+      await writeFile(join(root, groupName(0), fileName(0)), 'export const seed = 2;\n');
+      const refreshStart = performance.now();
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/projects/${project.id}/refresh`,
+        headers: { host: '127.0.0.1:4317' },
+        payload: {},
+      });
+      if (response.statusCode !== 200) throw new Error(response.body);
+      refresh = {
+        apiRefreshMs: Math.round(performance.now() - refreshStart),
+        ...response.json().analysisStats,
+      };
+    }
     return {
       analyzedFiles: project.fileCount,
       edges: project.edgeCount,
-      apiImportMs: Math.round(performance.now() - start),
+      apiImportMs,
+      ...refresh,
       diagnostics: diagnostics.length,
     };
   } finally {
@@ -84,7 +102,9 @@ try {
     await Promise.all(writes);
   }
 
-  const metrics = await (process.argv.includes('--api') ? benchmarkApi() : benchmarkAnalyzer());
+  const metrics = await (process.argv.includes('--api') || process.argv.includes('--refresh')
+    ? benchmarkApi()
+    : benchmarkAnalyzer());
   console.log(
     JSON.stringify(
       {

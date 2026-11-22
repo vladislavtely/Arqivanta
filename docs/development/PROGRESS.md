@@ -45,3 +45,10 @@ Run the GitHub Actions matrix against the intended release commit after publicat
 - Windows verification passed lint, formatting, the production build, 60 Vitest tests and eight Playwright scenarios in Chrome. A local Ollama smoke test with the installed `qwen2.5-coder:3b` model streamed an answer about Field Notes and returned two verified source ranges.
 - Repository chat now resets a two-minute inactivity timer as provider data arrives. A loopback fixture finished with a verified source citation after 65 seconds. Windows passed 62 Vitest tests and all eight Chrome scenarios after the change.
 - Verified citations show the file path and exact line range beside the cited statement. The Chrome chat scenario checks both inline placement and the first and last highlighted source lines.
+
+## Code Routes checkpoint
+
+- Code Routes traces supported Fastify and FastAPI registrations and statically resolved direct function calls. The explorer opens call sites and definitions by range. Saved traces can compare revisions and update individual changed steps.
+- Change impact compares the open snapshot with an earlier revision or local Git HEAD. It shows file, function and route changes, added and removed import links, shortest paths to potential callers and importers, and test files linked by imports.
+- A generated 10,000-file Windows benchmark measured 7.40 seconds for the first import and 4.57 seconds for refresh after changing one file. Refresh reused 9,999 parses. Peak RSS for the combined in-memory benchmark was 405 MiB.
+- Verified the real `POST /api/projects` route in Arqivanta. The route showed the resolved call to `analyze` and identified unresolved member calls. Windows passed lint, formatting, the production build, 64 Vitest tests and nine Chrome scenarios. The new browser scenario covers route navigation, saved-step updates, incremental refresh, and comparison against a temporary Git repository.

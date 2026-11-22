@@ -72,6 +72,88 @@ export interface FileRecord {
   imports: ImportRecord[];
   exports: ExportRecord[];
   symbols: SymbolRecord[];
+  flow?: FlowDefinition[];
+  fingerprint?: string;
+  normalizedFingerprint?: string;
+  reusableParse?: boolean;
+}
+
+export interface FlowCall {
+  label: string;
+  startLine: number;
+  endLine: number;
+  binding?: { name: string; module?: string };
+}
+
+export interface FlowDefinition extends SourceRef {
+  key: string;
+  label: string;
+  kind: 'function' | 'http';
+  exportName?: string;
+  registration?: SourceRef;
+  calls: FlowCall[];
+}
+
+export interface FlowAnchor {
+  path: string;
+  key: string;
+}
+
+export interface TraceStep {
+  id: string;
+  depth: number;
+  label: string;
+  evidence: SourceRef;
+  definition?: SourceRef;
+  state: 'entry' | 'resolved' | 'unresolved' | 'revisited';
+}
+
+export interface CodeTrace {
+  anchor: FlowAnchor;
+  label: string;
+  steps: TraceStep[];
+  limited: boolean;
+}
+
+export interface SavedTrace {
+  id: string;
+  title: string;
+  snapshotId: string;
+  anchor: FlowAnchor;
+  trace: CodeTrace;
+  fingerprints: Record<string, string>;
+  stepSnapshots?: Record<string, string>;
+}
+
+export interface SavedTraceReview {
+  saved: SavedTrace;
+  previousAvailable: boolean;
+  availableSnapshots: string[];
+  current?: CodeTrace;
+  changes: { id: string; status: 'unchanged' | 'changed' | 'removed' | 'added' }[];
+}
+
+export interface ImpactItem {
+  path: string;
+  label?: string;
+  distance: number;
+  chain: SourceRef[];
+  test: boolean;
+  snapshotId: string;
+}
+
+export interface SnapshotComparison {
+  baseline: ProjectSummary;
+  current: ProjectSummary;
+  fileCounts: { added: number; changed: number; removed: number };
+  files: { path: string; status: 'added' | 'changed' | 'removed' }[];
+  dependencyCounts: { added: number; removed: number };
+  dependencies: { edge: DependencyEdge; status: 'added' | 'removed' }[];
+  definitionCounts: { added: number; changed: number; removed: number };
+  definitions: { label: string; reference: SourceRef; status: 'added' | 'changed' | 'removed' }[];
+  callImpact: ImpactItem[];
+  impact: ImpactItem[];
+  limited: boolean;
 }
 
 export interface DependencyEdge {
@@ -93,6 +175,8 @@ export interface AnalysisResult {
   entryPoints: SourceRef[];
   diagnostics: Diagnostic[];
   sources: Record<string, string>;
+  parseVersion?: number;
+  analysisStats?: { parsed: number; reused: number };
 }
 
 export interface ProjectSummary {
@@ -104,6 +188,7 @@ export interface ProjectSummary {
   edgeCount: number;
   commitSha?: string;
   repositoryUrl?: string;
+  canRefresh?: boolean;
 }
 
 export interface ProjectAnalysis extends Omit<AnalysisResult, 'sources'> {

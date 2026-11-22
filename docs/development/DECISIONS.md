@@ -19,3 +19,9 @@ SQLite stores the recent analyses and their source snapshots together. This pres
 ## Treat AI as an explicit action
 
 Providers share a bounded request contract. Explanations use one excerpt and expose its verified range. Repository chat uses deterministic lexical and one-hop dependency retrieval over the current snapshot. Each selected excerpt receives an ID scoped to that question. The server verifies claimed IDs against the submitted ranges, and the explorer opens the immutable snapshot. The browser keeps settings, credentials, and chat in memory. Each remote discovery or generation request requires consent.
+
+## Trace from source and compare immutable revisions
+
+Record call expressions and framework registrations during each language parser's syntax pass. Resolve direct bindings against the analyzed import graph. Keep an explicit unresolved state for dispatch that cannot be linked from the available syntax. Compare snapshots through bounded reverse traversals so each affected result includes its reason. Preserve source ranges by snapshot and allow saved individual steps to retain the version last reviewed.
+
+Reuse complete syntax records by versioned content hash. Rebuild resolution from the current snapshot's file set to account for new files, deletions and configuration edits. Keep raw Git reads constrained to supported source within the selected working folder's subtree. [TypeScript Compiler API](https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API) · [GitHub stack graphs](https://github.blog/open-source/introducing-stack-graphs/) · [Git tree listings](https://git-scm.com/docs/git-ls-tree)

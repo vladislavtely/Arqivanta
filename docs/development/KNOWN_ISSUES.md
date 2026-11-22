@@ -6,6 +6,9 @@
 - Repository AI search is lexical and depends on overlap with source text, symbols, paths, and verified imports. General questions can miss relevant files. Source coverage is bounded by the current analysis and context window.
 - Context sizing uses a conservative UTF-8 estimate. Keep the configured window within the model's actual limits. OpenAI-compatible endpoints may require a separate context-length setting on the inference server.
 - A source citation confirms an excerpt and line range from the snapshot. Generated interpretations still require review.
+- Code Routes recognizes direct calls to unique named functions and common literal Fastify and FastAPI registrations. Dynamic dispatch, some registration helpers, namespace and barrel calls, runtime router prefixes, and callbacks outside supported forms may remain unresolved. Use source links to inspect branch conditions and registration context.
+- Git comparison requires Git in PATH and a committed HEAD. It compares analyzed source within the selected folder. Worktree-specific exclusions and coverage limits can affect which paths appear in each snapshot.
+- Related tests are inferred from test paths in import chains. Historical code remains available while its snapshot is cached.
 - Large repositories can reach scanning or graph limits. Review the diagnostics or open a smaller subfolder if appropriate.
 - Public GitHub imports use anonymous API access and the default branch. API limits, Git submodules and Git LFS can affect what is available for analysis.
 - The Windows browser suite uses installed Chrome in the development environment. The Repository AI Assistant changes have local verification. Hosted CI will run when the changes are published.

@@ -51,6 +51,22 @@ const configName = /^(?:(?:(?:tsconfig|jsconfig)(?:\.[\w.-]+)?|package)\.json|py
 const metadataName =
   /^(?:README|CHANGELOG|CONTRIBUTING|LICENSE|SECURITY|AGENTS)(?:\.(?:md|txt))?$/i;
 
+export function isGitSnapshotCandidate(relative: string) {
+  const segments = relative.split('/');
+  const name = segments.pop() ?? '';
+  return (
+    !secretName.test(name) &&
+    segments.every(
+      (part) => !skippedDirectories.has(part.toLowerCase()) && !secretName.test(part),
+    ) &&
+    (name === '.gitignore' ||
+      isJavaScriptOrTypeScript(name) ||
+      isPythonSource(name) ||
+      configName.test(name) ||
+      metadataName.test(name))
+  );
+}
+
 type RuleSet = { directory: string; rules: Ignore };
 type Candidate = { absolute: string; relative: string };
 const utf8 = new TextDecoder('utf-8', { fatal: true });

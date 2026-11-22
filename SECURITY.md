@@ -15,3 +15,7 @@ AI is off until enabled. Model discovery sends provider credentials if configure
 Each remote provider action requires explicit consent. The server requires HTTPS and public addresses for remote traffic, rejects redirects, and checks Ollama model metadata before allowing unconsented requests to a loopback model. A trusted loopback service can still forward traffic. Check its configuration. Keys are kept in memory and are used for provider authentication. Arqivanta does not collect telemetry.
 
 Repository text is data supplied to the model. The assistant exposes no execution tools and does not write to the repository. Model output is rendered as text. Citation links are created from application-verified ranges in the submitted snapshot. A citation establishes that the cited range exists in the provided context. Review the range to confirm that it substantiates the model's claim.
+
+## Local Git comparison
+
+Git HEAD comparison uses an installed Git executable and reads a pinned commit and raw blobs. The command arguments select read-only operations. Analysis uses a temporary directory with validated relative paths and bounded inputs. The working folder path and saved trace references are stored in the local SQLite cache.

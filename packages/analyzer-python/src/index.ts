@@ -1,5 +1,6 @@
 import { parser } from '@lezer/python';
 import type { Diagnostic, FileRecord, SourceFile, SourceRef } from '@arqivanta/shared';
+import { readPythonFlow } from './flow.ts';
 
 type SyntaxNode = ReturnType<typeof parser.parse>['topNode'];
 const recordLimit = 500;
@@ -79,7 +80,8 @@ export function parseFile(
     if (records.length < recordLimit) records.push(record);
     else truncated = true;
   }
-  parser.parse(file.source).iterate({
+  const tree = parser.parse(file.source);
+  tree.iterate({
     enter(node) {
       if (node.type.isError) {
         if (errors++ < diagnosticLimit)
@@ -123,6 +125,10 @@ export function parseFile(
       path: file.path,
       message: 'Python analysis omitted records after reaching the per-file limit.',
     });
+  }
+  if (!errors) {
+    const flow = readPythonFlow(tree, file.source, file.path, lines);
+    if (flow.length) result.flow = flow;
   }
   return result;
 }
