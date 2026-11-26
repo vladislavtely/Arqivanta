@@ -1146,6 +1146,26 @@ input::placeholder {
   display: grid;
   gap: 0.4rem;
 }
+.graph-evidence {
+  display: grid;
+  gap: 0.65rem;
+}
+.graph-evidence-pair {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.graph-evidence .graph-references .graph-references {
+  margin: 0.3rem 0 0.5rem 0.7rem;
+}
+.graph-evidence-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
 .graph-stats {
   display: grid;
   gap: 0.4rem;

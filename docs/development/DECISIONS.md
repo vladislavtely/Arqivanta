@@ -16,6 +16,10 @@ On the generated large-project benchmark, filesystem reads and snapshot lookup w
 
 SQLite stores the recent analyses and their source snapshots together. This preserves line references if a local file changes or a downloaded archive is removed. GitHub cache keys include the repository URL and commit SHA. The service keeps 16 snapshots to bound retained data. Exports contain source references and graph metadata.
 
+## Project a bounded architecture map
+
+Index the folder tree and verified edges once per snapshot. In the grouped view, each file resolves to a visible file node or its nearest visible folder. Aggregate directed dependencies between these endpoints and keep references to the original file edges for the inspector. Cap the graph passed to React Flow and page the evidence list separately. Defer graph search rendering so the input stays responsive. [Nx workspace graph](https://nx.dev/docs/features/explore-graph) · [React Flow performance](https://reactflow.dev/learn/advanced-use/performance)
+
 ## Treat AI as an explicit action
 
 Providers share a bounded request contract. Explanations use one excerpt and expose its verified range. Repository chat uses deterministic lexical and one-hop dependency retrieval over the current snapshot. Each selected excerpt receives an ID scoped to that question. The server verifies claimed IDs against the submitted ranges, and the explorer opens the immutable snapshot. The browser keeps settings, credentials, and chat in memory. Each remote discovery or generation request requires consent.

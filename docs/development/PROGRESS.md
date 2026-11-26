@@ -33,9 +33,10 @@ Run the GitHub Actions matrix against the intended release commit after publicat
 
 ## Architecture Map clarity
 
-- Dense snapshots open in a folder overview with one directed link per pair of connected folders. Users can inspect cross-folder imports or open a folder to see its files. Reciprocal connection counts are offset for readability.
+- Dense snapshots open in a folder overview. Folders expand within the map, preserving external connections as imports move to the visible file or its nearest visible folder. The inspector searches and pages the file pairs and original import ranges behind each visible connection.
 - Selecting a file or folder highlights outgoing imports with a solid cyan stroke and incoming imports with a dashed amber stroke. File focus shows only direct imports and importers. Nodes can be dragged within the active layout and reset to automatic positions.
-- A generated snapshot with 138 files and 404 dependencies showed three folders and three directional folder connections. Browser coverage verifies dragging, resetting, folder navigation, and both import directions.
+- Back restores the prior map scope, expanded folders, selection, layout and viewport. The map remains available when opening an import range in Explorer. Browser coverage verifies these transitions, both import directions, and evidence pagination.
+- On Windows, a generated graph with 10,000 files and 50,000 verified edges took a median 24.77 ms to index and 7.75 ms to project an expanded view across 20 measured runs after four warmups. The expanded view contained 49 items and 160 rendered-edge candidates. A real Arqivanta snapshot with 101 files and 93 edges took a median 0.10 ms to project the expanded view. These measurements cover graph data preparation in Node, without browser rendering or the initial source scan.
 
 ## Repository AI Assistant
 

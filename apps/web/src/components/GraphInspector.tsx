@@ -1,4 +1,4 @@
-import type { FolderLink } from '@arqivanta/graph-engine';
+import { useMemo, useState } from 'react';
 import type { DependencyEdge, FileRecord, SourceRef } from '@arqivanta/shared';
 import { FileCode2, FolderOpen, GitBranch, Network } from 'lucide-react';
 import type { FileSelection } from './Explorer';
@@ -12,12 +12,14 @@ export type GraphSelection =
   | {
       type: 'folder';
       path: string;
+      expanded: boolean;
+      hiddenChildren: number;
       fileCount: number;
       internal: number;
       incoming: number;
       outgoing: number;
     }
-  | { type: 'folder link'; link: FolderLink }
+  | { type: 'group link'; source: string; target: string; dependencies: DependencyEdge[] }
   | { type: 'file'; file: FileRecord; entryPoint: boolean; incoming: number; outgoing: number }
   | { type: 'file link'; link: DependencyEdge };
 
@@ -25,16 +27,160 @@ function lineLabel(ref: SourceRef) {
   return ref.path + ':' + ref.startLine + (ref.endLine > ref.startLine ? '–' + ref.endLine : '');
 }
 
+const perPage = 20;
+
+function ImportLocations({
+  references,
+  onOpenFile,
+}: {
+  references: SourceRef[];
+  onOpenFile: (selection: FileSelection) => void;
+}) {
+  const [page, setPage] = useState(0);
+  return (
+    <>
+      <ul className="graph-references">
+        {references.slice(page * perPage, (page + 1) * perPage).map((ref) => (
+          <li key={lineLabel(ref)}>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() =>
+                onOpenFile({ path: ref.path, line: ref.startLine, endLine: ref.endLine })
+              }
+            >
+              {lineLabel(ref)}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <EvidencePages
+        page={page}
+        total={references.length}
+        onPage={setPage}
+        title="import locations"
+      />
+    </>
+  );
+}
+
+function EvidencePages({
+  page,
+  total,
+  onPage,
+  title,
+}: {
+  page: number;
+  total: number;
+  onPage: (page: number) => void;
+  title: string;
+}) {
+  const pages = Math.ceil(total / perPage);
+  if (pages <= 1) return null;
+  return (
+    <div className="graph-evidence-pages">
+      <button
+        type="button"
+        className="button"
+        aria-label={'Previous ' + title + ' page'}
+        disabled={page === 0}
+        onClick={() => onPage(page - 1)}
+      >
+        Previous
+      </button>
+      <span aria-live="polite">
+        {page + 1} / {pages}
+      </span>
+      <button
+        type="button"
+        className="button"
+        aria-label={'Next ' + title + ' page'}
+        disabled={page + 1 === pages}
+        onClick={() => onPage(page + 1)}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+function GroupEvidence({
+  dependencies,
+  onOpenFile,
+}: {
+  dependencies: DependencyEdge[];
+  onOpenFile: (selection: FileSelection) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<DependencyEdge>();
+  const filtered = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return search
+      ? dependencies.filter(
+          ({ source, target }) =>
+            source.toLowerCase().includes(search) || target.toLowerCase().includes(search),
+        )
+      : dependencies;
+  }, [dependencies, query]);
+  return (
+    <div className="graph-evidence">
+      <label className="search-field">
+        <input
+          type="search"
+          aria-label="Search file pairs"
+          placeholder="Search file pairs"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(0);
+            setSelected(undefined);
+          }}
+        />
+      </label>
+      <p aria-live="polite">{plural(filtered.length, 'file dependency', 'file dependencies')}</p>
+      <ul className="graph-references">
+        {filtered.slice(page * perPage, (page + 1) * perPage).map((dependency) => (
+          <li key={JSON.stringify([dependency.source, dependency.target])}>
+            <button
+              className="text-button graph-evidence-pair"
+              type="button"
+              aria-expanded={selected === dependency}
+              onClick={() => setSelected(selected === dependency ? undefined : dependency)}
+            >
+              {dependency.source} imports {dependency.target}
+            </button>
+            {selected === dependency && (
+              <ImportLocations references={dependency.references} onOpenFile={onOpenFile} />
+            )}
+          </li>
+        ))}
+      </ul>
+      <EvidencePages
+        page={page}
+        total={filtered.length}
+        onPage={(value) => {
+          setPage(value);
+          setSelected(undefined);
+        }}
+        title="file pairs"
+      />
+    </div>
+  );
+}
+
 export function GraphInspector({
   selection,
   folderView,
-  onOpenFolder,
+  onToggleFolder,
+  connectionKey,
   onFocusFile,
   onOpenFile,
 }: {
   selection?: GraphSelection;
   folderView: boolean;
-  onOpenFolder: (path: string) => void;
+  onToggleFolder: (path: string) => void;
+  connectionKey?: string;
   onFocusFile?: () => void;
   onOpenFile: (selection: FileSelection) => void;
 }) {
@@ -63,44 +209,34 @@ export function GraphInspector({
             <dd>{selection.incoming}</dd>
           </div>
         </dl>
-        <button type="button" className="button" onClick={() => onOpenFolder(selection.path)}>
-          Open folder
+        <button
+          type="button"
+          className="button"
+          aria-expanded={selection.expanded}
+          onClick={() => onToggleFolder(selection.path)}
+        >
+          {selection.expanded ? 'Collapse folder' : 'Expand folder'}
         </button>
+        {selection.hiddenChildren > 0 && <p>Search this folder to bring more items into view.</p>}
       </>
     );
-  } else if (selection?.type === 'folder link') {
-    const { link } = selection;
+  } else if (selection?.type === 'group link') {
     details = (
       <>
         <h2>
-          <GitBranch size={17} aria-hidden="true" /> Folder connection
+          <GitBranch size={17} aria-hidden="true" /> Group connection
         </h2>
         <dl className="graph-relation">
-          <dt>Source folder</dt>
-          <dd>{folderName(link.source)}</dd>
-          <dt>Target folder</dt>
-          <dd>{folderName(link.target)}</dd>
+          <dt>Source</dt>
+          <dd>{selection.source}</dd>
+          <dt>Target</dt>
+          <dd>{selection.target}</dd>
         </dl>
-        <p className="inspector-label">
-          {plural(link.count, 'file dependency', 'file dependencies')}
-        </p>
-        <ul className="graph-references">
-          {link.examples.map((example) => {
-            const ref = example.references[0];
-            return (
-              <li key={JSON.stringify([example.source, example.target])}>
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => onOpenFile({ path: example.source, line: ref?.startLine })}
-                >
-                  {fileName(example.source)} imports {fileName(example.target)}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        {link.count > link.examples.length && <p>Showing {link.examples.length} examples.</p>}
+        <GroupEvidence
+          key={connectionKey}
+          dependencies={selection.dependencies}
+          onOpenFile={onOpenFile}
+        />
       </>
     );
   } else if (selection?.type === 'file link') {
@@ -117,19 +253,7 @@ export function GraphInspector({
           <dd>{link.target}</dd>
         </dl>
         <p className="inspector-label">Source references</p>
-        <ul className="graph-references">
-          {link.references.map((ref) => (
-            <li key={lineLabel(ref)}>
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => onOpenFile({ path: ref.path, line: ref.startLine })}
-              >
-                {lineLabel(ref)}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <ImportLocations key={connectionKey} references={link.references} onOpenFile={onOpenFile} />
       </>
     );
   } else if (selection?.type === 'file') {

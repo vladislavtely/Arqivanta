@@ -46,6 +46,7 @@ export function App() {
   const [selection, setSelection] = useState<FileSelection>();
   const [traceStart, setTraceStart] = useState<FlowAnchor>();
   const [routesOpened, setRoutesOpened] = useState(false);
+  const [graphOpened, setGraphOpened] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [assistantView, setAssistantView] = useState<AssistantView>('ask');
@@ -96,6 +97,7 @@ export function App() {
       setAnalysis(result);
       setTraceStart(undefined);
       setRoutesOpened(false);
+      setGraphOpened(false);
       setRefreshError(null);
       setSelection(path ? { path } : undefined);
       setView('explorer');
@@ -175,7 +177,14 @@ export function App() {
               key={id}
               type="button"
               aria-current={id === view ? 'page' : undefined}
-              onClick={() => (id === 'routes' ? openRoutes() : setView(id))}
+              onClick={() => {
+                if (id === 'routes') {
+                  openRoutes();
+                  return;
+                }
+                if (id === 'graph' && analysis) setGraphOpened(true);
+                setView(id);
+              }}
               title={label}
             >
               <Icon size={18} aria-hidden="true" />
@@ -277,14 +286,16 @@ export function App() {
               />
             </div>
           )}
-          {view === 'graph' && analysis && (
-            <Architecture
-              key={analysis.project.id}
-              analysis={analysis}
-              selected={selection?.path}
-              onSelect={setSelection}
-              onOpenFile={openFile}
-            />
+          {graphOpened && analysis && (
+            <div hidden={view !== 'graph'}>
+              <Architecture
+                key={analysis.project.id}
+                analysis={analysis}
+                selected={selection?.path}
+                onSelect={setSelection}
+                onOpenFile={openFile}
+              />
+            </div>
           )}
           {view === 'export' && analysis && <Export analysis={analysis} />}
         </main>

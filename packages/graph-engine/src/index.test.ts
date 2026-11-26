@@ -1,6 +1,11 @@
 import type { DependencyEdge, FileRecord } from '@arqivanta/shared';
 import { describe, expect, it } from 'vitest';
-import { buildFolderGraph, buildGraphView } from './index.ts';
+import {
+  buildGraphView,
+  folderDependencyCounts,
+  groupDependencyGraph,
+  indexFolderGraph,
+} from './index.ts';
 
 function file(path: string): FileRecord {
   return {
@@ -84,36 +89,112 @@ describe('buildGraphView', () => {
   });
 });
 
-it('aggregates directed folder links and counts internal edges separately', () => {
+it('projects directed links and retains each verified dependency after nested expansion', () => {
   const files = [
     'tests/first.py',
     'tests/second.py',
-    'app/main.py',
+    'app/api/main.py',
     'app/util.py',
     'README.md',
   ].map(file);
   const edges = [
-    edge('tests/first.py', 'app/main.py'),
+    edge('tests/first.py', 'app/api/main.py'),
     edge('tests/second.py', 'app/util.py'),
-    edge('app/main.py', 'app/util.py'),
+    edge('app/api/main.py', 'app/util.py'),
     edge('app/util.py', 'missing.py'),
-    edge('app/main.py', 'tests/second.py'),
+    edge('app/api/main.py', 'tests/second.py'),
   ];
-  const graph = buildFolderGraph(files, edges);
-  expect(graph.folders).toEqual(
+  const index = indexFolderGraph(files, edges);
+  const graph = groupDependencyGraph(index);
+  expect(graph.nodes.map(({ id }) => id)).toEqual(['folder:', 'folder:app', 'folder:tests']);
+  expect(folderDependencyCounts(index.edges, 'app')).toEqual({
+    incoming: 2,
+    outgoing: 1,
+    internal: 1,
+  });
+  expect(graph.links).toEqual([
+    { source: 'folder:tests', target: 'folder:app', count: 2, dependencies: edges.slice(0, 2) },
+    { source: 'folder:app', target: 'folder:tests', count: 1, dependencies: [edges[4]] },
+  ]);
+  const expanded = new Set(['app', 'app/api']);
+  const open = groupDependencyGraph(index, { expanded });
+  expect(open.links).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ path: 'tests', fileCount: 2, outgoing: 2 }),
-      expect.objectContaining({ path: 'app', fileCount: 2, incoming: 2, internal: 1 }),
-      expect.objectContaining({ path: '', fileCount: 1 }),
+      {
+        source: 'folder:tests',
+        target: 'file:app/api/main.py',
+        count: 1,
+        dependencies: [edges[0]],
+      },
+      {
+        source: 'file:app/api/main.py',
+        target: 'folder:tests',
+        count: 1,
+        dependencies: [edges[4]],
+      },
+      {
+        source: 'file:app/api/main.py',
+        target: 'file:app/util.py',
+        count: 1,
+        dependencies: [edges[2]],
+      },
     ]),
   );
-  expect(graph.links).toEqual([
-    { source: 'tests', target: 'app', count: 2, examples: edges.slice(0, 2) },
-    { source: 'app', target: 'tests', count: 1, examples: [edges[4]] },
-  ]);
-  expect(buildFolderGraph(files, edges, { query: 'util.py' })).toMatchObject({
-    folders: [expect.objectContaining({ path: 'app', fileCount: 2 })],
-    links: [],
-    matchingFolderCount: 1,
+  expect(open).toEqual(
+    groupDependencyGraph(indexFolderGraph([...files].reverse(), [...edges].reverse()), {
+      expanded,
+    }),
+  );
+  expect(
+    groupDependencyGraph(index, { expanded, query: 'util.py' }).nodes.map(({ id }) => id),
+  ).toEqual(['folder:app', 'file:app/util.py']);
+});
+
+it('hits display limits without capping the evidence behind visible grouped links', () => {
+  const files = Array.from({ length: 600 }, (_, id) => file('app/file-' + id + '.ts'));
+  const target = file('lib/index.ts');
+  const index = indexFolderGraph(
+    [...files, target],
+    files.map(({ path }) => edge(path, target.path)),
+  );
+  const expanded = new Set(['app']);
+  const open = groupDependencyGraph(index, { expanded });
+  expect(open.nodes).toHaveLength(26);
+  expect(open.omittedNodes).toBe(576);
+  expect(open.links.reduce((total, link) => total + link.count, 0)).toBe(600);
+  expect(open.links.find(({ source }) => source === 'folder:app')?.dependencies).toHaveLength(576);
+  expect(
+    groupDependencyGraph(index, { expanded, query: 'file-599' }).nodes.map(({ id }) => id),
+  ).toContain('file:app/file-599.ts');
+  const limited = groupDependencyGraph(index, { expanded, maxLinks: 2 });
+  expect(limited.links).toHaveLength(2);
+  expect(limited.omittedLinks).toBe(23);
+});
+
+it('keeps the root folder ID distinct from file paths', () => {
+  const index = indexFolderGraph(
+    [file('folder:.ts'), file('app/index.ts')],
+    [edge('folder:.ts', 'app/index.ts')],
+  );
+  expect(groupDependencyGraph(index, { expanded: new Set(['']) }).links[0]).toMatchObject({
+    source: 'file:folder:.ts',
+    target: 'folder:app',
   });
+});
+
+it('opens workspace containers by default and keeps room for the requested branch', () => {
+  const files = [
+    ...Array.from({ length: 40 }, (_, id) => file('packages/pkg-' + id + '/index.ts')),
+    file('packages/pkg-39/nested/file.ts'),
+  ];
+  const index = indexFolderGraph(files, []);
+  expect([...index.initialExpansion]).toEqual(['packages']);
+  const selected = 'packages/pkg-39/nested';
+  const { nodes } = groupDependencyGraph(index, {
+    expanded: new Set([...index.initialExpansion, 'packages/pkg-39', selected]),
+    priorityPath: selected,
+    maxNodes: 12,
+  });
+  expect(nodes.length).toBeLessThanOrEqual(12);
+  expect(nodes.map(({ id }) => id)).toContain('file:packages/pkg-39/nested/file.ts');
 });

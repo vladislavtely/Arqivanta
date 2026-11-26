@@ -1,7 +1,12 @@
 import type { DependencyEdge, FileRecord, SourceRef } from '@arqivanta/shared';
 
-export { buildFolderGraph, parentFolder } from './folders.ts';
-export type { FolderLink } from './folders.ts';
+export {
+  folderDependencyCounts,
+  groupDependencyGraph,
+  indexFolderGraph,
+  parentFolder,
+} from './folders.ts';
+export type { GroupedLink } from './folders.ts';
 
 export type GraphScope = 'all' | 'connected' | 'entry-points' | 'selected';
 

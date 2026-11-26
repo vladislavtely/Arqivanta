@@ -1,6 +1,12 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
 import type { ProjectAnalysis } from '@arqivanta/shared';
-import { buildFolderGraph, buildGraphView, parentFolder } from '@arqivanta/graph-engine';
+import {
+  buildGraphView,
+  folderDependencyCounts,
+  groupDependencyGraph,
+  indexFolderGraph,
+  parentFolder,
+} from '@arqivanta/graph-engine';
 import type { GraphScope } from '@arqivanta/graph-engine';
 import {
   Background,
@@ -21,9 +27,11 @@ import type {
   NodeChange,
   NodePositionChange,
   NodeProps,
+  Viewport,
   XYPosition,
 } from '@xyflow/react';
 import {
+  ArrowLeft,
   ChevronDown,
   FileCode2,
   Folder,
@@ -37,7 +45,18 @@ import { folderName, GraphInspector } from './GraphInspector';
 import type { GraphSelection } from './GraphInspector';
 import { fileName, plural } from './ui';
 
-type MapScope = GraphScope | 'folders' | 'folder';
+type MapScope = GraphScope | 'folders';
+type MapView = {
+  scope: MapScope;
+  expanded: ReadonlySet<string>;
+  priorityPath?: string;
+  query: string;
+  nodeId?: string;
+  focusPath?: string;
+  edgeId?: string;
+  positions: ReadonlyMap<string, XYPosition>;
+  initialViewport?: Viewport;
+};
 type RepositoryNode = Node<
   {
     label: string;
@@ -50,10 +69,10 @@ type RepositoryNode = Node<
 
 const fileLimit = 350;
 const edgeLimit = 1200;
-const folderPrefix = 'folder:';
+const fitViewOptions = { padding: 0.2, maxZoom: 1.1 };
 const colors = { outgoing: '#6edce6', incoming: '#ffc47c', neutral: '#817b9c', picked: '#baa8ff' };
 
-function NodeCard({ data, selected }: NodeProps<RepositoryNode>) {
+const NodeCard = memo(function NodeCard({ data, selected }: NodeProps<RepositoryNode>) {
   const Icon = data.kind === 'folder' ? Folder : data.kind === 'entry' ? GitBranch : FileCode2;
   const classes = [
     'graph-node',
@@ -73,13 +92,13 @@ function NodeCard({ data, selected }: NodeProps<RepositoryNode>) {
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </div>
   );
-}
+});
 
 const nodeTypes = { repository: NodeCard };
 
 type FolderConnectionEdge = Edge<{ labelOffset: number }, 'folderConnection'>;
 
-function FolderConnection({
+const FolderConnection = memo(function FolderConnection({
   data,
   sourceX,
   sourceY,
@@ -114,7 +133,7 @@ function FolderConnection({
       labelBgBorderRadius={props.labelBgBorderRadius}
     />
   );
-}
+});
 
 const edgeTypes = { folderConnection: FolderConnection };
 
@@ -137,62 +156,78 @@ export function Architecture({
   onSelect: (selection: FileSelection) => void;
   onOpenFile: (selection: FileSelection) => void;
 }) {
-  const [scope, setScope] = useState<MapScope>(() =>
-    analysis.files.length >= 75 || analysis.edges.length >= 160 ? 'folders' : 'all',
+  const folderIndex = useMemo(
+    () => indexFolderGraph(analysis.files, analysis.edges),
+    [analysis.files, analysis.edges],
   );
-  const [query, setQuery] = useState('');
-  const [selectedFolder, setSelectedFolder] = useState(() =>
-    selected ? parentFolder(selected) : undefined,
-  );
-  const [folderFilter, setFolderFilter] = useState<string>();
-  const [edgeId, setEdgeId] = useState<string>();
-  const [layouts, setLayouts] = useState(() => new Map<string, Map<string, XYPosition>>());
+  const [view, setView] = useState<MapView>(() => ({
+    scope: analysis.files.length >= 75 || analysis.edges.length >= 160 ? 'folders' : 'all',
+    expanded: folderIndex.initialExpansion,
+    query: '',
+    positions: new Map(),
+  }));
+  const [history, setHistory] = useState<MapView[]>([]);
   const [revision, setRevision] = useState(0);
+  const viewport = useRef<Viewport>(undefined);
+  const { scope, expanded, priorityPath, query, edgeId, positions, initialViewport } = view;
+  const graphQuery = useDeferredValue(query.trim().toLowerCase());
 
   const folderView = scope === 'folders';
-  const focus = scope === 'selected' ? selected : undefined;
-  const activeFolder = scope === 'folder' ? folderFilter : undefined;
-  const layoutKey = JSON.stringify([scope, activeFolder, focus]);
-  const positions = layouts.get(layoutKey);
+  const focus = scope === 'selected' ? (view.focusPath ?? selected) : undefined;
   const folderGraph = useMemo(
-    () => (folderView ? buildFolderGraph(analysis.files, analysis.edges, { query }) : undefined),
-    [analysis, folderView, query],
+    () =>
+      folderView
+        ? groupDependencyGraph(folderIndex, { expanded, priorityPath, query: graphQuery })
+        : undefined,
+    [folderIndex, folderView, expanded, priorityPath, graphQuery],
   );
   const filesGraph = useMemo(() => {
     if (scope === 'folders') return;
-    const files =
-      activeFolder === undefined
-        ? analysis.files
-        : analysis.files.filter((file) => parentFolder(file.path) === activeFolder);
-    return buildGraphView(files, analysis.edges, analysis.entryPoints, {
-      scope: scope === 'folder' ? 'all' : scope,
-      query,
+    return buildGraphView(analysis.files, analysis.edges, analysis.entryPoints, {
+      scope,
+      query: graphQuery,
       selected: focus,
       maxFiles: fileLimit,
       maxEdges: edgeLimit,
     });
-  }, [analysis, scope, query, focus, activeFolder]);
+  }, [analysis, scope, graphQuery, focus]);
 
-  const folder = folderGraph?.folders.find((item) => item.path === selectedFolder);
-  const file = filesGraph?.files.find((item) => item.file.path === selected);
-  const activePath = folder?.path ?? file?.file.path;
+  const selectedId = view.nodeId ?? (folderView ? undefined : (focus ?? selected));
+  const groupedNode = folderGraph?.nodes.find((item) => item.id === selectedId);
+  const flatNode = filesGraph?.files.find((item) => item.file.path === selectedId);
+  const folder = groupedNode?.kind === 'folder' ? groupedNode : undefined;
+  const file = groupedNode?.kind === 'file' ? groupedNode.file : flatNode?.file;
+  const activeId = groupedNode?.id ?? flatNode?.file.path;
+  const entryPaths = useMemo(
+    () => new Set(analysis.entryPoints.map((entry) => entry.path)),
+    [analysis.entryPoints],
+  );
   const baseNodes = useMemo((): RepositoryNode[] => {
     if (folderGraph) {
-      return folderGraph.folders.map(({ path, fileCount, x, y }) => ({
-        id: folderPrefix + path,
-        position: { x, y },
-        width: 236,
-        height: 72,
-        type: 'repository',
-        ariaLabel: folderName(path),
-        data: {
-          label: folderName(path),
-          subtitle: plural(fileCount, 'file'),
-          kind: 'folder',
-          path,
-        },
-        selected: path === selectedFolder,
-      }));
+      return folderGraph.nodes.map((node) => {
+        const { id, path, x, y } = node;
+        return {
+          id,
+          position: { x, y },
+          width: 236,
+          height: 72,
+          type: 'repository',
+          ariaLabel: node.kind === 'folder' ? folderName(path) : path,
+          data: {
+            label: node.kind === 'folder' ? folderName(path) : fileName(path),
+            subtitle:
+              node.kind === 'folder'
+                ? node.expanded
+                  ? node.hiddenChildren
+                    ? plural(node.hiddenChildren, 'hidden item')
+                    : 'Expanded'
+                  : plural(node.fileCount, 'file')
+                : folderName(parentFolder(path)),
+            kind: node.kind === 'folder' ? 'folder' : entryPaths.has(path) ? 'entry' : 'file',
+            path,
+          },
+        };
+      });
     }
     return (filesGraph?.files ?? []).map(({ file, entryPoint, x, y }) => ({
       id: file.path,
@@ -207,28 +242,28 @@ export function Architecture({
         kind: entryPoint ? 'entry' : 'file',
         path: file.path,
       },
-      selected: file.path === selected,
     }));
-  }, [folderGraph, filesGraph, selectedFolder, selected]);
+  }, [folderGraph, filesGraph, entryPaths]);
   const nodes = useMemo(
     () =>
-      positions
-        ? baseNodes.map((node) => {
-            const position = positions.get(node.id);
-            return position ? { ...node, position } : node;
-          })
-        : baseNodes,
-    [baseNodes, positions],
+      baseNodes.map((node) => {
+        const position = positions.get(node.id);
+        return position || node.id === activeId
+          ? { ...node, position: position ?? node.position, selected: node.id === activeId }
+          : node;
+      }),
+    [baseNodes, positions, activeId],
   );
 
   const links = folderGraph?.links ?? filesGraph?.edges;
+  const nodesById = useMemo(() => new Map(baseNodes.map((node) => [node.id, node])), [baseNodes]);
   const edges = useMemo((): Edge[] => {
     const folderLinks = folderView ? new Set(links?.map(linkId)) : undefined;
     return (links ?? []).map((link) => {
       const id = linkId(link);
       const picked = id === edgeId;
-      const outgoing = activePath === link.source;
-      const incoming = !outgoing && activePath === link.target;
+      const outgoing = activeId === link.source;
+      const incoming = !outgoing && activeId === link.target;
       const emphasized = picked || outgoing || incoming;
       const color = outgoing
         ? colors.outgoing
@@ -237,23 +272,26 @@ export function Architecture({
           : picked
             ? colors.picked
             : colors.neutral;
-      const muted = activePath !== undefined && !emphasized;
-      const count = 'count' in link ? link.count : undefined;
+      const muted = activeId !== undefined && !emphasized;
+      const source = nodesById.get(link.source)?.ariaLabel ?? link.source;
+      const target = nodesById.get(link.target)?.ariaLabel ?? link.target;
+      const grouped =
+        nodesById.get(link.source)?.data.kind === 'folder' ||
+        nodesById.get(link.target)?.data.kind === 'folder';
+      const count = 'count' in link && grouped ? link.count : undefined;
       return {
         id,
-        source: folderView ? folderPrefix + link.source : link.source,
-        target: folderView ? folderPrefix + link.target : link.target,
-        type: folderView ? 'folderConnection' : 'default',
+        source: link.source,
+        target: link.target,
+        type: grouped ? 'folderConnection' : 'default',
         data: folderLinks?.has(linkId({ source: link.target, target: link.source }))
           ? { labelOffset: link.source < link.target ? -14 : 14 }
           : undefined,
-        ariaLabel: folderView
-          ? folderName(link.source) +
-            ' imports ' +
-            folderName(link.target) +
-            ', ' +
-            plural(count ?? 0, 'file dependency', 'file dependencies')
-          : link.source + ' imports ' + link.target,
+        ariaLabel:
+          source +
+          ' imports ' +
+          target +
+          (count === undefined ? '' : ', ' + plural(count, 'file dependency', 'file dependencies')),
         markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
         selected: picked,
         zIndex: picked ? 3 : emphasized ? 2 : 0,
@@ -267,7 +305,7 @@ export function Architecture({
         },
         label:
           count !== undefined &&
-          (emphasized || (activePath === undefined && (links?.length ?? 0) < 18))
+          (emphasized || (activeId === undefined && (links?.length ?? 0) < 18))
             ? String(count)
             : undefined,
         labelStyle: { fill: '#f0e9ff', fontSize: 12, fontWeight: 650 },
@@ -276,62 +314,131 @@ export function Architecture({
         labelBgBorderRadius: 5,
       };
     });
-  }, [activePath, edgeId, folderView, links]);
+  }, [activeId, edgeId, folderView, links, nodesById]);
 
   const counts = useMemo(() => {
     const related = { incoming: 0, outgoing: 0 };
-    if (selected) {
+    if (file) {
       for (const link of analysis.edges) {
-        if (link.source === selected) related.outgoing++;
-        if (link.target === selected) related.incoming++;
+        if (link.source === file.path) related.outgoing++;
+        if (link.target === file.path) related.incoming++;
       }
     }
     return related;
-  }, [analysis.edges, selected]);
+  }, [analysis.edges, file]);
+  const folderPath = folder?.path;
+  const folderCounts = useMemo(
+    () =>
+      folderPath === undefined ? undefined : folderDependencyCounts(folderIndex.edges, folderPath),
+    [folderIndex, folderPath],
+  );
   const activeLink = useMemo(
     () => (edgeId === undefined ? undefined : links?.find((link) => linkId(link) === edgeId)),
     [edgeId, links],
   );
   let inspector: GraphSelection | undefined;
   if (activeLink) {
-    inspector =
-      'count' in activeLink
-        ? { type: 'folder link', link: activeLink }
-        : { type: 'file link', link: activeLink };
-  } else if (folder) {
-    inspector = { type: 'folder', ...folder };
+    if ('dependencies' in activeLink) {
+      const source = nodesById.get(activeLink.source);
+      const target = nodesById.get(activeLink.target);
+      inspector =
+        source?.data.kind === 'folder' || target?.data.kind === 'folder'
+          ? {
+              type: 'group link',
+              source: source?.ariaLabel ?? activeLink.source,
+              target: target?.ariaLabel ?? activeLink.target,
+              dependencies: activeLink.dependencies,
+            }
+          : { type: 'file link', link: activeLink.dependencies[0] };
+    } else {
+      inspector = { type: 'file link', link: activeLink };
+    }
+  } else if (folder && folderCounts) {
+    inspector = { type: 'folder', ...folder, ...folderCounts };
   } else if (file) {
-    inspector = { type: 'file', file: file.file, entryPoint: file.entryPoint, ...counts };
+    inspector = { type: 'file', file, entryPoint: entryPaths.has(file.path), ...counts };
   }
 
-  function changeScope(value: MapScope) {
-    setScope(value);
-    setEdgeId(undefined);
+  function navigate(next: MapView) {
+    const previous = {
+      ...view,
+      nodeId: selectedId,
+      focusPath: focus,
+      initialViewport: viewport.current,
+    };
+    setHistory((steps) => [...steps.slice(-23), previous]);
+    setView(next);
+    viewport.current = next.initialViewport;
+    setRevision((value) => value + 1);
   }
-  function openFolder(path: string) {
-    setFolderFilter(path);
-    setQuery('');
-    changeScope('folder');
+  function goBack() {
+    const previous = history.at(-1);
+    if (!previous) return;
+    setHistory(history.slice(0, -1));
+    setView(previous);
+    viewport.current = previous.initialViewport;
+    setRevision((value) => value + 1);
+  }
+  function changeScope(value: MapScope) {
+    if (value === scope) return;
+    const focusPath = value === 'selected' ? (file?.path ?? selected) : undefined;
+    navigate({
+      scope: value,
+      expanded,
+      priorityPath,
+      query,
+      nodeId: focusPath,
+      focusPath,
+      positions: new Map(),
+    });
+  }
+  function toggleFolder(path: string) {
+    const next = new Set(expanded);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    navigate({
+      ...view,
+      expanded: next,
+      priorityPath: next.has(path) ? path : undefined,
+      edgeId: undefined,
+      initialViewport: undefined,
+    });
   }
   function focusFile() {
-    setQuery('');
-    changeScope('selected');
+    if (!file) return;
+    navigate({
+      scope: 'selected',
+      query: '',
+      expanded,
+      priorityPath,
+      nodeId: file.path,
+      focusPath: file.path,
+      positions: new Map(),
+    });
   }
   function resetLayout() {
-    setLayouts((previous) => {
-      const next = new Map(previous);
-      next.delete(layoutKey);
-      return next;
-    });
+    setView((previous) => ({ ...previous, positions: new Map(), initialViewport: undefined }));
+    viewport.current = undefined;
     setRevision((previous) => previous + 1);
   }
+  const selectEdge = useCallback((id?: string) => {
+    setView((previous) => (previous.edgeId === id ? previous : { ...previous, edgeId: id }));
+  }, []);
+  const rememberViewport = useCallback((_: unknown, value: Viewport) => {
+    viewport.current = value;
+  }, []);
   const selectNode = useCallback(
     (id: string) => {
-      setEdgeId(undefined);
-      if (folderView) setSelectedFolder(id.slice(folderPrefix.length));
-      else onSelect({ path: id });
+      const node = nodesById.get(id);
+      if (!node) return;
+      setView((previous) =>
+        previous.nodeId === id && !previous.edgeId
+          ? previous
+          : { ...previous, nodeId: id, edgeId: undefined },
+      );
+      if (node.data.kind !== 'folder') onSelect({ path: node.data.path });
     },
-    [folderView, onSelect],
+    [nodesById, onSelect],
   );
   const changeNodes = useCallback(
     (changes: NodeChange<RepositoryNode>[]) => {
@@ -340,23 +447,40 @@ export function Architecture({
           change.type === 'position' && change.position !== undefined,
       );
       if (moved.length) {
-        setLayouts((previous) => {
-          const next = new Map(previous.get(layoutKey));
-          for (const change of moved) if (change.position) next.set(change.id, change.position);
-          return new Map(previous).set(layoutKey, next);
+        setView((previous) => {
+          const next = new Map(previous.positions);
+          for (const change of moved) {
+            if (!change.position) continue;
+            next.delete(change.id);
+            next.set(change.id, change.position);
+          }
+          while (next.size > fileLimit) {
+            const oldest = next.keys().next().value;
+            if (oldest === undefined) break;
+            next.delete(oldest);
+          }
+          return { ...previous, positions: next };
         });
       }
       const picked = changes.find((change) => change.type === 'select' && change.selected);
       if (picked?.type === 'select') selectNode(picked.id);
     },
-    [layoutKey, selectNode],
+    [selectNode],
   );
 
   const searchLabel = folderView ? 'Search folders or files' : 'Search graph files';
   const summary = folderGraph
-    ? visibleCount(folderGraph.folders.length, folderGraph.matchingFolderCount, 'folder') +
+    ? visibleCount(
+        folderGraph.nodes.length,
+        folderGraph.nodes.length + folderGraph.omittedNodes,
+        'item',
+      ) +
       ' · ' +
-      visibleCount(folderGraph.links.length, folderGraph.matchingLinkCount, 'folder connection')
+      visibleCount(
+        folderGraph.links.length,
+        folderGraph.links.length + folderGraph.omittedLinks,
+        'connection',
+      )
     : visibleCount(filesGraph?.files.length ?? 0, filesGraph?.matchingFileCount ?? 0, 'file') +
       ' · ' +
       visibleCount(filesGraph?.edges.length ?? 0, filesGraph?.matchingEdgeCount ?? 0, 'dependency');
@@ -374,7 +498,7 @@ export function Architecture({
       </header>
       <div
         className={
-          activePath === undefined ? 'panel graph-panel' : 'panel graph-panel has-direction-legend'
+          activeId === undefined ? 'panel graph-panel' : 'panel graph-panel has-direction-legend'
         }
       >
         <div className="graph-toolbar">
@@ -386,8 +510,13 @@ export function Architecture({
               placeholder={searchLabel}
               value={query}
               onChange={(event) => {
-                setQuery(event.target.value);
-                setEdgeId(undefined);
+                const value = event.target.value;
+                setView((previous) => ({
+                  ...previous,
+                  query: value,
+                  edgeId: undefined,
+                  initialViewport: undefined,
+                }));
               }}
             />
           </label>
@@ -404,24 +533,12 @@ export function Architecture({
               <option value="selected" disabled={!selected}>
                 Selected file and neighbors
               </option>
-              {folderFilter !== undefined && (
-                <option value="folder">Files in {folderName(folderFilter)}</option>
-              )}
             </select>
             <ChevronDown size={15} aria-hidden="true" />
           </label>
-          {scope === 'folder' && (
-            <button
-              type="button"
-              className="button"
-              onClick={() => {
-                setQuery('');
-                changeScope('folders');
-              }}
-            >
-              Back to folders
-            </button>
-          )}
+          <button type="button" className="button" disabled={!history.length} onClick={goBack}>
+            <ArrowLeft size={15} aria-hidden="true" /> Back
+          </button>
           <button
             type="button"
             className="button"
@@ -434,7 +551,7 @@ export function Architecture({
             {summary}
           </span>
         </div>
-        {activePath !== undefined && (
+        {activeId !== undefined && (
           <div className="graph-legend" aria-label="Dependency direction">
             <span style={{ color: colors.outgoing }}>Imports</span>
             <span className="incoming" style={{ color: colors.incoming }}>
@@ -446,14 +563,16 @@ export function Architecture({
           <section className="graph-canvas" aria-label="Repository dependency graph">
             {nodes.length ? (
               <ReactFlow
-                key={JSON.stringify([layoutKey, query.trim().toLowerCase(), revision])}
+                key={JSON.stringify([graphQuery, revision])}
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 colorMode="dark"
-                fitView
-                fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
+                fitView={!initialViewport}
+                fitViewOptions={fitViewOptions}
+                defaultViewport={initialViewport}
+                onMove={rememberViewport}
                 minZoom={0.1}
                 nodesDraggable
                 nodesConnectable={false}
@@ -462,17 +581,19 @@ export function Architecture({
                 onlyRenderVisibleElements
                 onNodeClick={(_, node) => selectNode(node.id)}
                 onNodeDoubleClick={(_, node) =>
-                  folderView ? openFolder(node.data.path) : onOpenFile({ path: node.data.path })
+                  node.data.kind === 'folder'
+                    ? toggleFolder(node.data.path)
+                    : onOpenFile({ path: node.data.path })
                 }
                 onNodesChange={changeNodes}
-                onEdgeClick={(_, edge) => setEdgeId(edge.id)}
+                onEdgeClick={(_, edge) => selectEdge(edge.id)}
                 onEdgesChange={(changes) => {
                   const picked = changes.find(
                     (change) => change.type === 'select' && change.selected,
                   );
-                  if (picked?.type === 'select') setEdgeId(picked.id);
+                  if (picked?.type === 'select') selectEdge(picked.id);
                 }}
-                onPaneClick={() => setEdgeId(undefined)}
+                onPaneClick={() => selectEdge()}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background variant={BackgroundVariant.Dots} gap={23} size={1} color="#383845" />
@@ -488,7 +609,7 @@ export function Architecture({
             ) : (
               <div className="blank-source">
                 <Network size={28} aria-hidden="true" />
-                <h2>{folderView ? 'No matching folders' : 'No matching files'}</h2>
+                <h2>{folderView ? 'No matching groups' : 'No matching files'}</h2>
                 <p>Change the graph search or filter.</p>
               </div>
             )}
@@ -496,8 +617,9 @@ export function Architecture({
           <GraphInspector
             selection={inspector}
             folderView={folderView}
-            onOpenFolder={openFolder}
-            onFocusFile={scope === 'selected' ? undefined : focusFile}
+            onToggleFolder={toggleFolder}
+            onFocusFile={focus === file?.path ? undefined : focusFile}
+            connectionKey={activeLink ? linkId(activeLink) : undefined}
             onOpenFile={onOpenFile}
           />
         </div>
